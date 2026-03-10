@@ -1,0 +1,41 @@
+--- DATABASE DIAGNOSTICS ---
+
+--- DESCRIBING gd_topics ---
+('id', 'int', 'NO', 'PRI', None, 'auto_increment')
+('topic', 'text', 'NO', '', None, '')
+('created_at', 'timestamp', 'YES', '', 'CURRENT_TIMESTAMP', 'DEFAULT_GENERATED')
+
+--- RECENT RESULTS (LAST 10) ---
+(79, 'Anna', 'GD', 0, datetime.datetime(2026, 3, 10, 2, 11, 7))
+(78, 'Anna', 'TECHNICAL', 2, datetime.datetime(2026, 3, 10, 2, 8, 37))
+(77, 'Anna', 'APTITUDE', 4, datetime.datetime(2026, 3, 10, 2, 7, 11))
+(76, 'Anna', 'APTITUDE', 2, datetime.datetime(2026, 3, 9, 23, 55, 49))
+(75, 'Adithya1', 'TECHNICAL', 7, datetime.datetime(2026, 3, 9, 22, 28, 22))
+(74, 'Adithya1', 'APTITUDE', 5, datetime.datetime(2026, 3, 9, 7, 23, 29))
+(73, 'Adithya1', 'TECHNICAL', 6, datetime.datetime(2026, 3, 9, 7, 21, 37))
+(72, 'Adithya1', 'TECHNICAL', 6, datetime.datetime(2026, 3, 4, 6, 46, 17))
+(71, 'Adithya1', 'APTITUDE', 2, datetime.datetime(2026, 3, 4, 6, 45, 6))
+(70, 'Adithya1', 'APTITUDE', 2, datetime.datetime(2026, 3, 3, 21, 15, 32))
+
+--- DESCRIBING gd_results ---
+('id', 'int', 'NO', 'PRI', None, 'auto_increment')
+('username', 'varchar(255)', 'YES', 'MUL', None, '')
+('topic_id', 'int', 'NO', '', None, '')
+('user_answer', 'text', 'YES', '', None, '')
+('content_score', 'float', 'YES', '', None, '')
+('communication_score', 'float', 'YES', '', None, '')
+('camera_score', 'float', 'YES', '', None, '')
+('final_score', 'float', 'YES', '', None, '')
+('feedback', 'text', 'YES', '', None, '')
+('ideal_answer', 'text', 'YES', '', None, '')
+('timestamp', 'timestamp', 'YES', '', 'CURRENT_TIMESTAMP', 'DEFAULT_GENERATED')
+
+--- DATE COMPARISON TEST ---
+NOW: (datetime.datetime(2026, 3, 10, 9, 18, 15), datetime.date(2026, 3, 10))
+Count for Today: 3
+
+--- RESULT CATEGORY COUNTS ---
+('APTITUDE', 32)
+('GD', 2)
+('INTERVIEW', 5)
+('TECHNICAL', 40)
