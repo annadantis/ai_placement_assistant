@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/teacher_api_service.dart';
+import '../providers/auth_provider.dart';
 
 class StudentDetailScreen extends StatefulWidget {
   final String username;
+  final String? teacherName;
 
   const StudentDetailScreen({
     Key? key,
     required this.username,
+    this.teacherName,
   }) : super(key: key);
 
   @override
@@ -15,6 +19,7 @@ class StudentDetailScreen extends StatefulWidget {
 
 class _StudentDetailScreenState extends State<StudentDetailScreen> {
   Map<String, dynamic>? _data;
+  List<dynamic>? _suggestionHistory;
   bool _isLoading = true;
   String? _error;
 
@@ -31,9 +36,14 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
     });
 
     try {
-      final data = await TeacherApiService.getStudentProgress(widget.username);
+      final results = await Future.wait([
+        TeacherApiService.getStudentProgress(widget.username),
+        TeacherApiService.getSuggestions(widget.username),
+      ]);
+      
       setState(() {
-        _data = data;
+        _data = results[0] as Map<String, dynamic>;
+        _suggestionHistory = results[1] as List<dynamic>;
         _isLoading = false;
       });
     } catch (e) {
@@ -94,12 +104,6 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                         const SizedBox(height: 15),
                         _buildQuickStats(),
                         const SizedBox(height: 25),
-                        if ((_data!['interview_history'] as List).isNotEmpty) ...[
-                          _buildSectionHeader("Mock Interview Sessions"),
-                          const SizedBox(height: 15),
-                          _buildInterviewHistory(),
-                          const SizedBox(height: 25),
-                        ],
                         if ((_data!['category_stats'] as Map).isNotEmpty) ...[
                           _buildSectionHeader("Category Mastery"),
                           const SizedBox(height: 15),
@@ -112,12 +116,176 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                           _buildWeakAreas(),
                           const SizedBox(height: 25),
                         ],
-                        _buildSectionHeader("Quiz Activity Log"),
+                        _buildSectionHeader("Activity Log"),
                         const SizedBox(height: 15),
                         _buildQuizHistory(),
+                        const SizedBox(height: 25),
+                        _buildSectionHeader("Feedback History"),
+                        const SizedBox(height: 15),
+                        _buildSuggestionHistory(),
                       ],
                     ),
                   ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _showSuggestionDialog,
+          backgroundColor: const Color(0xFF24D876),
+          foregroundColor: Colors.black,
+          icon: const Icon(Icons.maps_ugc_rounded),
+          label: const Text("Send Suggestion", style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSuggestionHistory() {
+    if (_suggestionHistory == null || _suggestionHistory!.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 20),
+          child: Text("No suggestions sent yet.", style: TextStyle(color: Colors.white24)),
+        ),
+      );
+    }
+
+    return Column(
+      children: _suggestionHistory!.map((s) {
+        final bool isRead = s['is_read'] == 1 || s['is_read'] == true;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1D1E33),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withOpacity(0.03)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isRead 
+                        ? const Color(0xFF24D876).withOpacity(0.1) 
+                        : Colors.orangeAccent.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      isRead ? "READ" : "UNREAD",
+                      style: TextStyle(
+                        fontSize: 10, 
+                        fontWeight: FontWeight.bold, 
+                        color: isRead ? const Color(0xFF24D876) : Colors.orangeAccent,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _formatShortDate(s['timestamp']),
+                    style: const TextStyle(color: Colors.white24, fontSize: 11),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                s['message'] ?? "",
+                style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Sent by: ${s['teacher'] ?? 'Unknown'}",
+                style: const TextStyle(color: Colors.white30, fontSize: 11, fontStyle: FontStyle.italic),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  void _showSuggestionDialog() {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final controller = TextEditingController();
+    bool isSending = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1D1E33),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: Colors.white10)),
+          title: Row(
+            children: [
+              const Icon(Icons.auto_awesome_rounded, color: Color(0xFF24D876)),
+              const SizedBox(width: 10),
+              Text("Suggest to ${widget.username}", style: const TextStyle(color: Colors.white, fontSize: 18)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "Provide personalized feedback or action items for this student. They will receive a notification instantly.",
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+              const SizedBox(height: 15),
+              TextField(
+                controller: controller,
+                maxLines: 4,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: "Enter your suggestion...",
+                  hintStyle: const TextStyle(color: Colors.white24),
+                  filled: true,
+                  fillColor: Colors.black26,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSending ? null : () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.white38)),
+            ),
+            ElevatedButton(
+              onPressed: isSending ? null : () async {
+                if (controller.text.trim().isEmpty) return;
+                
+                setDialogState(() => isSending = true);
+                try {
+                  final senderName = widget.teacherName ?? auth.username ?? "Academic Staff";
+                  print("DEBUG: Sending suggestion from $senderName");
+                  await TeacherApiService.sendSuggestion(
+                    widget.username,
+                    senderName,
+                    controller.text.trim(),
+                  );
+                  if (mounted) {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Suggestion sent successfully!"), backgroundColor: Color(0xFF24D876)),
+                    );
+                  }
+                } catch (e) {
+                  setDialogState(() => isSending = false);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text("Failed to send: $e"), backgroundColor: Colors.redAccent),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF24D876),
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: isSending 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                : const Text("Send Now", style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -230,26 +398,6 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
     );
   }
 
-  Widget _buildInterviewHistory() {
-    final list = _data!['interview_history'] as List;
-    return Column(
-      children: list.map((session) => Card(
-        margin: const EdgeInsets.only(bottom: 12),
-        child: ListTile(
-          onTap: () => _showInterviewDetail(session['id']),
-          leading: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(color: Colors.purple.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-            child: const Icon(Icons.video_chat_outlined, color: Colors.purpleAccent),
-          ),
-          title: Text("Session #${session['id']}", style: const TextStyle(fontWeight: FontWeight.bold)),
-          subtitle: Text("Score: ${session['score']}/10 • ${session['confidence']}", style: const TextStyle(fontSize: 12, color: Colors.white38)),
-          trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.white24),
-        ),
-      )).toList(),
-    );
-  }
-
   Widget _buildCategoryStats() {
     final stats = _data!['category_stats'] as Map<String, dynamic>;
     return Card(
@@ -328,108 +476,83 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
         final double pct = (q['percentage'] as num).toDouble();
         final Color scoreColor = pct >= 80 ? const Color(0xFF24D876) : pct >= 50 ? Colors.orangeAccent : Colors.redAccent;
         
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1D1E33),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withOpacity(0.03)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 45,
-                height: 45,
-                decoration: BoxDecoration(color: scoreColor.withOpacity(0.1), shape: BoxShape.circle),
-                child: Center(child: Text("${pct.toInt()}%", style: TextStyle(color: scoreColor, fontWeight: FontWeight.bold, fontSize: 12))),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        return GestureDetector(
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: const Color(0xFF1D1E33),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                title: Text("${q['category'].toString().toUpperCase()} - ${q['area']}", style: const TextStyle(color: Colors.white, fontSize: 18)),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(q['category'].toString().toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                    Text(q['area'], style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    Text("${q['score']}/10", style: TextStyle(color: scoreColor, fontSize: 48, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
+                    Text("Date: ${_formatShortDate(q['date'])}", style: const TextStyle(color: Colors.white54)),
+                    if (q['confidence'] != null && q['confidence'].toString().isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text("Confidence: ${q['confidence']}", style: const TextStyle(color: Colors.white54)),
+                    ]
                   ],
                 ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  if (q['confidence'] != null && q['confidence'].toString().isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(4)),
-                      child: Text(q['confidence'], style: const TextStyle(fontSize: 9, color: Colors.white54)),
-                    ),
-                  const SizedBox(height: 4),
-                  Text(_formatShortDate(q['date']), style: const TextStyle(color: Colors.white24, fontSize: 9)),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text("Close", style: TextStyle(color: Color(0xFF24D876))),
+                  )
                 ],
               ),
-            ],
+            );
+          },
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1D1E33),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.03)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 45,
+                  height: 45,
+                  decoration: BoxDecoration(color: scoreColor.withOpacity(0.1), shape: BoxShape.circle),
+                  child: Center(child: Text("${q['score']}", style: TextStyle(color: scoreColor, fontWeight: FontWeight.bold, fontSize: 14))),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(q['category'].toString().toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      Text(q['area'], style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (q['confidence'] != null && q['confidence'].toString().isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(4)),
+                        child: Text(q['confidence'], style: const TextStyle(fontSize: 9, color: Colors.white54)),
+                      ),
+                    const SizedBox(height: 4),
+                    Text(_formatShortDate(q['date']), style: const TextStyle(color: Colors.white24, fontSize: 9)),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       }).toList(),
     );
   }
 
-  void _showInterviewDetail(int sessionId) async {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF1D1E33),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.9,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (_, scrollController) => FutureBuilder<Map<String, dynamic>>(
-          future: TeacherApiService.getInterviewSessionDetail(sessionId),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-            if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}"));
-            
-            final detail = snapshot.data!;
-            final report = detail['detailed_report'] as List;
-            
-            return ListView(
-              controller: scrollController,
-              padding: const EdgeInsets.all(24),
-              children: [
-                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(2)))),
-                const SizedBox(height: 24),
-                const Text("Session Analysis", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                Text("Overall Score: ${detail['score']}/10", style: const TextStyle(color: Color(0xFF24D876), fontWeight: FontWeight.bold, fontSize: 18)),
-                const SizedBox(height: 25),
-                _buildReportSection("Behavioral Feedback", detail['behavioral_feedback'], Icons.face_retouching_natural_rounded),
-                const SizedBox(height: 25),
-                const Text("Technical Breakdown", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                const SizedBox(height: 15),
-                ...report.map((q) => Container(
-                  margin: const EdgeInsets.only(bottom: 16),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(16)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("Q: ${q['question']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                      const SizedBox(height: 10),
-                      Text("Feedback: ${q['feedback']}", style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                      const SizedBox(height: 8),
-                      Text("Score: ${q['score']}/10", style: const TextStyle(color: Color(0xFF24D876), fontSize: 12, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                )).toList(),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
+
 
   Widget _buildReportSection(String title, String? content, IconData icon) {
     if (content == null || content.isEmpty) return const SizedBox.shrink();

@@ -20,7 +20,7 @@ class _PremiumLoadingOverlayState extends State<PremiumLoadingOverlay> with Tick
     "Did you know? Consistent practice improves placement chances by 40%.",
     "Tip: Maintain eye contact with the camera to show confidence.",
     "Pro Tip: Speak at a moderate pace (140 WPM) for best AI evaluation.",
-    "Fun Fact: Mock interviews reduce real-world anxiety significantly.",
+    "Fun Fact: Mock interviews reduce real world anxiety significantly.",
     "Remember: Strong technical fundamentals are the key to any coding round.",
     "Tip: Avoid filler words like 'um' and 'like' for a higher voice score.",
     "Preparing your personalized career roadmap...",
@@ -78,35 +78,7 @@ class _PremiumLoadingOverlayState extends State<PremiumLoadingOverlay> with Tick
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Professional Corporate Logo Mark (Replaces "Ball")
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.03),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.blueAccent.withOpacity(0.3), width: 1.5),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blueAccent.withOpacity(0.1),
-                            blurRadius: 30,
-                            spreadRadius: 2,
-                          )
-                        ],
-                      ),
-                      child: Center(
-                        child: Text(
-                          "PA",
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.9),
-                            fontSize: 32,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -2,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 20),
                     
                     // Loading Message with Professional Shimmer
                     AnimatedBuilder(

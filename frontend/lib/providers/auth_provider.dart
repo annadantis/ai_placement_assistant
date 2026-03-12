@@ -28,6 +28,11 @@ class AuthProvider with ChangeNotifier {
     return false;
   }
 
+  void setTeacherSession(String user) {
+    username = user;
+    notifyListeners();
+  }
+
   Future<bool> register(String user, String pass, [String? branch, String? role]) async {
     try {
       String cleanUser = user.trim();

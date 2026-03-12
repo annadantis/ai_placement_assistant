@@ -5,8 +5,85 @@ from typing import List, Dict, Optional
 from pydantic import BaseModel
 import time
 from concurrent.futures import ThreadPoolExecutor
+from newspaper import Article
+import pyttsx3
+import threading
+import subprocess
+import sys
+import queue
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+# Robust TTS Process Management for Windows
+class SpeechManager:
+    def __init__(self):
+        self._current_process = None
+        self._lock = threading.Lock()
+
+    def speak(self, text):
+        """Terminate current speech and start new process-based TTS."""
+        with self._lock:
+            self.stop_locked()
+            
+            # Use sys.executable to ensure we use the same python environment
+            # Small script to handle the TTS in isolation
+            script = f"import pyttsx3; e=pyttsx3.init(); e.setProperty('rate', 175); e.say({repr(text)}); e.runAndWait()"
+            
+            try:
+                print(f"🎙️ SpeechManager: Launching TTS process...")
+                self._current_process = subprocess.Popen(
+                    [sys.executable, "-c", script],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            except Exception as e:
+                print(f"⚠️ SpeechManager Launch Error: {e}")
+
+    def stop(self):
+        """Public stop method."""
+        with self._lock:
+            self.stop_locked()
+
+    def stop_locked(self):
+        """Internal stop to be called under lock."""
+        if self._current_process and self._current_process.poll() is None:
+            print(f"🛑 SpeechManager: Terminating current speech...")
+            try:
+                # Try graceful termination first
+                self._current_process.terminate()
+                # Wait briefly, then kill if still alive
+                try:
+                    self._current_process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    self._current_process.kill()
+            except Exception as e:
+                print(f"⚠️ Error stopping speech process: {e}")
+        self._current_process = None
+
+# Global manager instance
+speech_manager = SpeechManager()
+
+def speak(text):
+    """Bridge for existing calls to speak()."""
+    speech_manager.speak(text)
+
+@router.post("/stop-speech")
+def stop_news_speech():
+    """Stop any ongoing news summary speech."""
+    speech_manager.stop()
+    return {"status": "success"}
+
+def extract_article(url):
+    """Extract and truncate article text to 1200 characters."""
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        return article.text[:1200]
+    except Exception as e:
+        print(f"⚠️ Article extraction failed for {url}: {e}")
+        return ""
+
 
 # Simple in-memory cache
 news_cache = {
@@ -108,26 +185,38 @@ class SummaryRequest(BaseModel):
 @router.post("/summary")
 def get_news_summary(request: SummaryRequest):
     """
-    Generate a 1-sentence summary (Synchronous).
-    Using 'def' allows this blocking AI call to run in a thread pool.
+    Generate a 2-sentence summary using the fast pipeline (Extract -> phi3:mini -> Speak).
     """
     try:
-        print(f"🤖 Summarizing: {request.title}")
-        prompt = f"Summarize this tech news title into a single concise, professional sentence for a student's placement preparation: '{request.title}'. Focus on its industry significance. Do NOT include any introductory text or quotes."
+        print(f"🤖 Processing fast pipeline for: {request.title}")
+        
+        # 1. Extraction (if URL available)
+        article_text = ""
+        if request.url:
+            article_text = extract_article(request.url)
+        
+        # Fallback to title if extraction fails or no URL
+        text_to_summarize = article_text if article_text and len(article_text) > 100 else request.title
+        
+        # 2. Fast Summarization with phi3:mini
+        prompt = f"Summarize this tech news in 2 short sentences:\n{text_to_summarize}"
         
         response = ollama.generate(
-            model='llama3',
+            model='phi3:mini',
             prompt=prompt,
-            options={'num_predict': 100, 'temperature': 0.7}
+            options={'num_predict': 150, 'temperature': 0.7}
         )
         
         summary = response.get('response', '').strip()
         if not summary:
-            return {"summary": request.title}
+            summary = f"Summary of {request.title}: {text_to_summarize[:100]}..."
+            
+        # 3. Instant TTS
+        speak(summary)
             
         return {"summary": summary}
     except Exception as e:
-        print(f"⚠️ Error generating summary: {e}")
+        print(f"⚠️ Error in fast news pipeline: {e}")
         return {"summary": request.title}
 
 # Cache for the collective briefing
@@ -172,9 +261,9 @@ def get_trends_briefing():
         """
         
         response = ollama.generate(
-            model='llama3',
+            model='phi3:mini',
             prompt=prompt,
-            options={'num_predict': 150, 'temperature': 0.7}
+            options={'num_predict': 200, 'temperature': 0.7}
         )
         
         briefing = response.get('response', '').strip()

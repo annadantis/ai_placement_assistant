@@ -22,8 +22,15 @@ class TeacherLogin(BaseModel):
 
 class TeacherRegister(BaseModel):
     username: str
+    email: str
     password: str
     secret_code: str
+
+import bcrypt
+
+def hash_password(password: str) -> str:
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 
 @router.post("/login")
@@ -33,28 +40,31 @@ async def teacher_login(credentials: TeacherLogin, db: Session = Depends(get_db)
     Validates credentials and checks role = 'teacher'
     """
     
-    # Domain validation
-    if not credentials.username.strip().lower().endswith('@rajagiritech.edu.in'):
-        raise HTTPException(401, "Invalid domain. Only @rajagiritech.edu.in is allowed.")
+    # Removing domain validation here because they will login with username
 
-    result = db.execute(
-        text("SELECT username, role, branch FROM users WHERE username = :username AND password_hash = :password"),
-        {"username": credentials.username.strip(), "password": credentials.password}
-    )
-    
-    user = result.fetchone()
+    from models import User
+    user = db.query(User).filter(User.username == credentials.username.strip()).first()
     
     if not user:
         raise HTTPException(401, "Invalid credentials")
+        
+    # Check if the existing password is a bcrypt hash (starts with $2b$ or $2a$)
+    if user.password_hash.startswith('$2b$') or user.password_hash.startswith('$2a$'):
+        if not bcrypt.checkpw(credentials.password.encode('utf-8'), user.password_hash.encode('utf-8')):
+             raise HTTPException(401, "Invalid credentials")
+    else:
+        # Fallback for old plaintext passwords in database
+        if user.password_hash != credentials.password:
+             raise HTTPException(401, "Invalid credentials")
     
-    if user[1] != 'teacher':
+    if user.role != 'teacher':
         raise HTTPException(403, "Access denied - Teacher account required")
     
     return {
         "success": True,
-        "username": user[0],
-        "role": user[1],
-        "branch": user[2],
+        "username": user.username,
+        "role": user.role,
+        "branch": user.branch,
         "message": "Teacher login successful"
     }
 
@@ -65,24 +75,36 @@ async def teacher_register(credentials: TeacherRegister, db: Session = Depends(g
     Teacher registration endpoint.
     Requires @rajagiritech.edu.in email domain and secret access code.
     """
-    username = credentials.username.strip().lower()
+    username = credentials.username.strip()
+    email = credentials.email.strip().lower()
     
     if credentials.secret_code != 'Gemini':
         raise HTTPException(403, "Invalid secret access code.")
         
-    if not username.endswith('@rajagiritech.edu.in'):
+    if not email.endswith('@rajagiritech.edu.in'):
         raise HTTPException(403, "Invalid domain. Only @rajagiritech.edu.in is allowed for teachers.")
+
+    # Password validation
+    import re
+    password_pattern = r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$'
+    if not re.match(password_pattern, credentials.password):
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long, include an uppercase letter, a lowercase letter, a number, and a special character (@$!%*?&)")
 
     from models import User
     
     try:
-        existing = db.query(User).filter(User.username == username).first()
-        if existing:
+        existing_user = db.query(User).filter(User.username == username).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Teacher account already exists with this username")
+            
+        existing_email = db.query(User).filter(User.email == email).first()
+        if existing_email:
             raise HTTPException(status_code=400, detail="Teacher account already exists with this email")
         
         new_teacher = User(
             username=username,
-            password_hash=credentials.password,
+            email=email,
+            password_hash=hash_password(credentials.password),
             role='teacher',
             branch='ALL' # Default or you can leave it blank/None
         )
@@ -128,6 +150,7 @@ async def get_all_students(branch: Optional[str] = None, search: Optional[str] =
     
     query += """
         GROUP BY u.username, u.branch, u.created_at, u.aptitude_level, u.technical_level
+        HAVING total_quizzes > 0
         ORDER BY u.username
     """
     
@@ -414,6 +437,59 @@ async def get_dashboard_overview(db: Session = Depends(get_db)):
     """))
     branch_distribution = {row[0]: row[1] for row in branch_dist_res.fetchall()}
     
+    # Overall Average Score
+    overall_avg_res = db.execute(text("""
+        SELECT AVG(score * 10) FROM results
+    """)).scalar() or 0
+    overall_avg_score = float(overall_avg_res)
+
+    # Top Students Per Branch
+    # This query finds the student with the highest average score for each branch
+    top_students_query = """
+        SELECT branch, username, avg_p
+        FROM (
+            SELECT 
+                u.branch, 
+                u.username, 
+                AVG(r.score * 10) as avg_p,
+                ROW_NUMBER() OVER(PARTITION BY u.branch ORDER BY AVG(r.score * 10) DESC) as rn
+            FROM users u
+            JOIN results r ON u.username = r.username
+            WHERE u.role = 'student' AND u.branch IS NOT NULL
+            GROUP BY u.branch, u.username
+        ) t
+        WHERE rn = 1
+        ORDER BY avg_p DESC
+    """
+    top_students_res = db.execute(text(top_students_query))
+    top_students_per_branch = []
+    top_performing_branch = "None"
+    highest_branch_avg = 0
+    
+    # Calculate branch averages to find top branch
+    branch_avgs_res = db.execute(text("""
+        SELECT u.branch, AVG(r.score * 10) as avg_p
+        FROM users u
+        JOIN results r ON u.username = r.username
+        WHERE u.role = 'student' AND u.branch IS NOT NULL
+        GROUP BY u.branch
+        ORDER BY avg_p DESC
+    """))
+    
+    branch_avgs = []
+    for row in branch_avgs_res.fetchall():
+        if row[1] > highest_branch_avg:
+            highest_branch_avg = row[1]
+            top_performing_branch = row[0]
+        branch_avgs.append({"branch": row[0], "avg_score": round(row[1], 1)})
+
+    for row in top_students_res.fetchall():
+        top_students_per_branch.append({
+            "branch": row[0],
+            "username": row[1],
+            "avg_score": round(row[2], 1)
+        })
+
     # Overall completion rate (7 days)
     completion_data = db.execute(text("""
         SELECT 
@@ -447,6 +523,10 @@ async def get_dashboard_overview(db: Session = Depends(get_db)):
         "branch_distribution": branch_distribution,
         "completion_rate_7d": round(completion_rate, 1),
         "today_activity": today_stats,
+        "overall_avg_batch_score": round(overall_avg_score, 1),
+        "top_performing_branch": top_performing_branch,
+        "top_students_per_branch": top_students_per_branch,
+        "branch_performance": branch_avgs,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -717,3 +797,35 @@ async def get_daily_activity(date_str: Optional[str] = None, db: Session = Depen
         "completed_details": completed_list,
         "missed_details": missed_list
     }
+
+
+class SuggestionRequest(BaseModel):
+    teacher_username: str
+    message: str
+
+@router.post("/students/{username}/suggest")
+async def create_suggestion(username: str, req: SuggestionRequest, db: Session = Depends(get_db)):
+    """
+    Teacher sends a suggestion/feedback directly to a student.
+    """
+    from models import TeacherSuggestion
+    
+    # Verify student exists
+    result = db.execute(text("SELECT username FROM users WHERE username = :u AND role = 'student'"), {"u": username})
+    if not result.fetchone():
+        raise HTTPException(404, "Student not found")
+        
+    try:
+        new_sugg = TeacherSuggestion(
+            teacher_username=req.teacher_username,
+            student_username=username,
+            message=req.message
+        )
+        print(f"💾 [DB PRE-COMMIT] Saving suggestion: Teacher={req.teacher_username}, Student={username}")
+        db.add(new_sugg)
+        db.commit()
+        print(f"✅ [DB POST-COMMIT] Suggestion saved with ID: {new_sugg.id}")
+        return {"status": "success", "message": "Suggestion sent to student"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))

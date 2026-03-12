@@ -231,8 +231,22 @@ class _ReportDetailDialogState extends State<ReportDetailDialog> {
           if (details!['questions'] != null && (details!['questions'] as List).isNotEmpty)
             ...(details!['questions'] as List).map((item) {
               bool isCorrect = item['is_correct'] ?? false;
+              bool isSkipped = item['is_skipped'] ?? (item['user_selected'] == null || (item['user_selected'] as String?)?.isEmpty == true);
+              String? userSelected = item['user_selected'] as String?;
               List<dynamic> options = item['options'] ?? [];
-              
+
+              // Card color: green = correct, amber = skipped, red = wrong
+              Color cardColor = isCorrect
+                  ? Colors.green.withOpacity(0.05)
+                  : isSkipped
+                      ? Colors.amber.withOpacity(0.05)
+                      : Colors.red.withOpacity(0.05);
+              Color borderColor = isCorrect
+                  ? Colors.green.withOpacity(0.25)
+                  : isSkipped
+                      ? Colors.amber.withOpacity(0.25)
+                      : Colors.red.withOpacity(0.25);
+
               return Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Column(
@@ -242,11 +256,23 @@ class _ReportDetailDialogState extends State<ReportDetailDialog> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: isCorrect ? Colors.green.withOpacity(0.05) : Colors.red.withOpacity(0.05),
+                        color: cardColor,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: isCorrect ? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2))
+                        border: Border.all(color: borderColor),
                       ),
-                      child: Text("Q: ${item['question']}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isCorrect ? Icons.check_circle_outline : isSkipped ? Icons.remove_circle_outline : Icons.cancel_outlined,
+                            color: isCorrect ? Colors.greenAccent : isSkipped ? Colors.amberAccent : Colors.redAccent,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text("Q: ${item['question']}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Padding(
@@ -257,8 +283,18 @@ class _ReportDetailDialogState extends State<ReportDetailDialog> {
                           Row(
                             children: [
                               const Text("YOU PICKED: ", style: TextStyle(color: Colors.white54, fontSize: 11)),
-                              Text(item['user_selected'] ?? "N/A", 
-                                style: TextStyle(color: isCorrect ? Colors.greenAccent : Colors.redAccent, fontSize: 13, fontWeight: FontWeight.bold)),
+                              Text(
+                                isSkipped ? "Not Selected" : (userSelected ?? "N/A"),
+                                style: TextStyle(
+                                  color: isSkipped
+                                      ? Colors.amberAccent
+                                      : isCorrect
+                                          ? Colors.greenAccent
+                                          : Colors.redAccent,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                               const SizedBox(width: 20),
                               const Text("CORRECT: ", style: TextStyle(color: Colors.white54, fontSize: 11)),
                               Text(item['correct_answer'] ?? "N/A", style: const TextStyle(color: Colors.greenAccent, fontSize: 13, fontWeight: FontWeight.bold)),
@@ -270,16 +306,21 @@ class _ReportDetailDialogState extends State<ReportDetailDialog> {
                           ...options.asMap().entries.map((optEntry) {
                             String letter = ["A", "B", "C", "D"][optEntry.key];
                             bool isThisCorrect = letter == item['correct_answer'];
-                            bool isThisPicked = letter == item['user_selected'];
-                            
+                            // Only highlight as picked (red) if the user actually selected it AND it's wrong
+                            bool isThisPicked = !isSkipped && letter == userSelected;
+
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 4),
                               child: Text(
                                 "$letter) ${optEntry.value}",
                                 style: TextStyle(
-                                  color: isThisCorrect ? Colors.greenAccent : (isThisPicked ? Colors.redAccent : Colors.white38),
+                                  color: isThisCorrect
+                                      ? Colors.greenAccent
+                                      : isThisPicked
+                                          ? Colors.redAccent
+                                          : Colors.white38,
                                   fontSize: 12,
-                                  fontWeight: (isThisCorrect || isThisPicked) ? FontWeight.bold : FontWeight.normal
+                                  fontWeight: (isThisCorrect || isThisPicked) ? FontWeight.bold : FontWeight.normal,
                                 ),
                               ),
                             );

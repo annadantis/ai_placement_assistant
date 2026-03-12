@@ -97,7 +97,7 @@ class _InstructionsScreenState extends State<InstructionsScreen>
             'Questions are based on your engineering branch.',
             'You must speak your answer clearly within the given time.',
             'Your audio is transcribed and evaluated by AI.',
-            'Scoring is based on content accuracy, clarity, and confidence.',
+            'Scoring is based on content accuracy and camera input.',
             'Ensure you are in a well-lit, quiet environment.',
             'Your camera will be active for  analysis.',
             'Leaving the session mid-way will discard your result.',

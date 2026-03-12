@@ -8,6 +8,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(255), unique=True, nullable=False)
+    email = Column(String(255), unique=True, nullable=True)
     password_hash = Column(String(255), nullable=False)
     aptitude_level = Column(Integer, default=1)
     technical_level = Column(Integer, default=1)
@@ -153,3 +154,28 @@ class UserAskedQuestion(Base):
     username = Column(String(255), nullable=False)
     question_id = Column(Integer, nullable=False)
     timestamp = Column(TIMESTAMP, server_default=func.now())
+
+class TeacherSuggestion(Base):
+    """Model for teachers to send suggestions/feedback to students"""
+    __tablename__ = "teacher_suggestions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    teacher_username = Column(String(255), nullable=False)
+    student_username = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    is_read = Column(Integer, default=0) # 0 for unread, 1 for read
+    timestamp = Column(TIMESTAMP, server_default=func.now())
+
+class OTPVerification(Base):
+    """Temporary storage for email verification OTPs"""
+    __tablename__ = "otp_verifications"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False, unique=True)
+    otp_code = Column(String(6), nullable=False)
+    username = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    branch = Column(String(50))
+    role = Column(String(20), default='student')
+    expires_at = Column(TIMESTAMP, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())

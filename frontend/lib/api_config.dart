@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 class ApiConfig {
   // Use 10.0.2.2 if using Android Emulator, or your local IP if testing on a physical device.
   // For Windows/Web, localhost works.
-  static const String baseUrl = "http://localhost:8000";
+  static const String baseUrl = "http://127.0.0.1:8000";
 
   // ---------------- INTERVIEW ENDPOINTS ----------------
 
@@ -126,12 +126,15 @@ class ApiConfig {
   }
 
   /// Fetches an AI-generated 1-sentence summary for a specific news title
-  static Future<String> fetchNewsSummary(String title) async {
+  static Future<String> fetchNewsSummary(String title, {String? url}) async {
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/news/summary'),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({"title": title}),
+        body: json.encode({
+          "title": title,
+          "url": url,
+        }),
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -142,6 +145,29 @@ class ApiConfig {
     } catch (e) {
       print("Summary Fetch Error: $e");
       return title;
+    }
+  }
+
+  /// Stops any ongoing news summary speech
+  static Future<void> stopSpeech() async {
+    try {
+      await http.post(Uri.parse('$baseUrl/news/stop-speech'));
+    } catch (e) {
+      print("Stop Speech Error: $e");
+    }
+  }
+
+  static Future<List<dynamic>> fetchSuggestions(String username) async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/suggestions/$username'));
+      if (response.statusCode == 200) {
+        return json.decode(response.body)['suggestions'] ?? [];
+      } else {
+        throw Exception("Failed to load suggestions: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Suggestions Fetch Error: $e");
+      return [];
     }
   }
 
@@ -171,6 +197,17 @@ class ApiConfig {
       return json.decode(response.body);
     } else {
       throw Exception("Failed to load performance by date");
+    }
+  }
+
+  static Future<void> markSuggestionRead(int id) async {
+    try {
+      final response = await http.post(Uri.parse('$baseUrl/suggestions/$id/read'));
+      if (response.statusCode != 200) {
+        print("Failed to mark suggestion read: ${response.body}");
+      }
+    } catch (e) {
+      print("Mark Suggestion Read Error: $e");
     }
   }
 }

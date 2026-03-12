@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/teacher_api_service.dart';
+import '../providers/auth_provider.dart';
 import 'teacher_dashboard_screen.dart';
 
 class TeacherLoginScreen extends StatefulWidget {
@@ -33,11 +35,15 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
       );
 
       if (mounted) {
+        final teacherName = _usernameController.text.trim();
+        print("DEBUG: Teacher logged in as: $teacherName");
+        Provider.of<AuthProvider>(context, listen: false).setTeacherSession(teacherName);
+        
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (context) => TeacherDashboardScreen(
-              teacherName: response['username'],
+              teacherName: teacherName,
             ),
           ),
         );
@@ -107,18 +113,15 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                         TextFormField(
                           controller: _usernameController,
                           decoration: InputDecoration(
-                            labelText: 'College Email (@rajagiritech.edu.in)',
-                            prefixIcon: const Icon(Icons.email),
+                            labelText: 'Username',
+                            prefixIcon: const Icon(Icons.person),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
                           validator: (value) {
                             if (value == null || value.isEmpty) {
-                              return 'Please enter your college email';
-                            }
-                            if (!value.toLowerCase().endsWith('@rajagiritech.edu.in')) {
-                              return 'Must be an @rajagiritech.edu.in email';
+                              return 'Please enter your username';
                             }
                             return null;
                           },

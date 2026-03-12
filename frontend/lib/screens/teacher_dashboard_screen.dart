@@ -20,6 +20,7 @@ class TeacherDashboardScreen extends StatefulWidget {
 class _TeacherDashboardScreenState extends State<TeacherDashboardScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  int _selectedIndex = 0;
   final Color backgroundColor = const Color(0xFF0A0E21);
   final Color cardColor = const Color(0xFF1D1E33);
   final Color accentColor = const Color(0xFF24D876);
@@ -45,64 +46,116 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen>
         cardTheme: CardThemeData(
           color: cardColor,
           elevation: 5,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         ),
       ),
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(
-            'Admin Console - ${widget.teacherName}',
-            style: const TextStyle(
-                fontWeight: FontWeight.bold, letterSpacing: 1.2),
-          ),
-          elevation: 0,
-          backgroundColor: Colors.transparent,
-          bottom: TabBar(
-            controller: _tabController,
-            indicatorColor: accentColor,
-            indicatorWeight: 4,
-            indicatorSize: TabBarIndicatorSize.label,
-            labelColor: accentColor,
-            unselectedLabelColor: Colors.white54,
-            tabs: const [
-              Tab(icon: Icon(Icons.analytics_outlined), text: 'Analytics'),
-              Tab(icon: Icon(Icons.groups_outlined), text: 'Students'),
-              Tab(icon: Icon(Icons.account_tree_outlined), text: 'Branches'),
-              Tab(icon: Icon(Icons.history_outlined), text: 'Activity'),
-            ],
-          ),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 8.0),
-              child: IconButton(
-                icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
-                onPressed: () {
-                  final auth = Provider.of<AuthProvider>(context, listen: false);
-                  auth.logout();
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
-                    (Route<dynamic> route) => false,
-                  );
-                },
-                tooltip: 'Logout',
+        body: Row(
+          children: [
+            NavigationRail(
+              backgroundColor: cardColor,
+              selectedIndex: _selectedIndex,
+              minWidth: 90,
+              onDestinationSelected: (int index) {
+                setState(() {
+                  _selectedIndex = index;
+                  _tabController.animateTo(index);
+                });
+              },
+              labelType: NavigationRailLabelType.all,
+              leading: Column(
+                children: [
+                  const SizedBox(height: 30),
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: accentColor.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: accentColor, width: 2),
+                    ),
+                    child: Center(
+                      child: Text(
+                        widget.teacherName[0].toUpperCase(),
+                        style: TextStyle(fontSize: 28, color: accentColor, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text("ADMIN", style: TextStyle(fontSize: 10, color: Colors.white24, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                  const SizedBox(height: 40),
+                ],
+              ),
+              trailing: Expanded(
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 25.0),
+                    child: IconButton(
+                      icon: const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 28),
+                      onPressed: () {
+                        final auth = Provider.of<AuthProvider>(context, listen: false);
+                        auth.logout();
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(builder: (context) => const LoginScreen()),
+                          (Route<dynamic> route) => false,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              selectedIconTheme: IconThemeData(color: accentColor, size: 32),
+              unselectedIconTheme: const IconThemeData(color: Colors.white24, size: 28),
+              selectedLabelTextStyle: TextStyle(color: accentColor, fontWeight: FontWeight.bold, fontSize: 13),
+              unselectedLabelTextStyle: const TextStyle(color: Colors.white24, fontSize: 11),
+              destinations: const [
+                NavigationRailDestination(icon: Icon(Icons.dashboard_outlined), label: Text('Dashboard')),
+                NavigationRailDestination(icon: Icon(Icons.groups_outlined), label: Text('Students')),
+                NavigationRailDestination(icon: Icon(Icons.account_tree_outlined), label: Text('Branches')),
+                NavigationRailDestination(icon: Icon(Icons.history_outlined), label: Text('Activity')),
+              ],
+            ),
+            const VerticalDivider(thickness: 1, width: 1, color: Colors.white12),
+            Expanded(
+              child: Column(
+                children: [
+                  AppBar(
+                    title: Text(
+                      _destinations[_selectedIndex],
+                      style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                    ),
+                    elevation: 0,
+                    backgroundColor: Colors.transparent,
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      controller: _tabController,
+                      physics: const NeverScrollableScrollPhysics(),
+                      children: [
+                        const OverviewTab(),
+                        StudentsTab(teacherName: widget.teacherName),
+                        const BranchTab(),
+                        const ActivityTab(),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
-        body: TabBarView(
-          controller: _tabController,
-          children: const [
-            OverviewTab(),
-            StudentsTab(),
-            BranchTab(),
-            ActivityTab(),
           ],
         ),
       ),
     );
   }
+
+  static const List<String> _destinations = [
+    'Dashboard Overview',
+    'Student Directory',
+    'Branch Performance',
+    'System Activity'
+  ];
 }
 
 // ----------------------------------------------------------------------------
@@ -137,11 +190,20 @@ class _OverviewTabState extends State<OverviewTab> {
     });
 
     try {
+      // Use individual try-catch for each future to prevent one failure from breaking everything
       final results = await Future.wait([
-        TeacherApiService.getDashboardOverview(),
-        TeacherApiService.getBatchTrends(),
-        TeacherApiService.getAiRecommendations(),
-        TeacherApiService.getLivePulse(),
+        TeacherApiService.getDashboardOverview().catchError((e) {
+          debugPrint("Overview error: $e");
+          return <String, dynamic>{};
+        }),
+        TeacherApiService.getBatchTrends().catchError((e) {
+          debugPrint("Trends error: $e");
+          return <String, dynamic>{};
+        }),
+        TeacherApiService.getAiRecommendations().catchError((e) {
+          debugPrint("AI error: $e");
+          return {'recommendation': "AI insights currently unavailable."};
+        }),
       ]);
 
       if (mounted) {
@@ -149,7 +211,6 @@ class _OverviewTabState extends State<OverviewTab> {
           _overviewData = results[0];
           _trendsData = results[1];
           _aiRecommendation = results[2]['recommendation'];
-          _pulseData = results[3]['pulse'];
           _isLoading = false;
         });
       }
@@ -202,15 +263,7 @@ class _OverviewTabState extends State<OverviewTab> {
           const SizedBox(height: 25),
           _buildQuickStats(),
           const SizedBox(height: 25),
-          _buildSectionHeader("Live Activity Pulse"),
-          const SizedBox(height: 15),
-          _buildLivePulse(),
-          const SizedBox(height: 25),
-          _buildSectionHeader("Performance Trends"),
-          const SizedBox(height: 15),
-          _buildTrendChart(),
-          const SizedBox(height: 25),
-          _buildSectionHeader("Branch Analytics"),
+          _buildSectionHeader("Branch Distribution"),
           const SizedBox(height: 15),
           _buildBranchDistribution(),
         ],
@@ -279,123 +332,129 @@ class _OverviewTabState extends State<OverviewTab> {
     );
   }
 
-  Widget _buildLivePulse() {
-    final pulse = _pulseData ?? [];
-    if (pulse.isEmpty) {
-      return Container(
-        height: 120,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1D1E33),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: const Center(
-          child: Text("No recent activity in the last 2 hours", style: TextStyle(color: Colors.white30)),
-        ),
-      );
-    }
+  Widget _buildQuickStats() {
+    if (_overviewData == null || _overviewData!.isEmpty)
+      return const SizedBox(height: 100, child: Center(child: Text("Analytics data currently unavailable")));
 
-    return Container(
-      height: 220,
-      decoration: BoxDecoration(
-        color: const Color(0xFF1D1E33),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: ListView.builder(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          itemCount: pulse.length,
-          itemBuilder: (context, index) {
-            final item = pulse[index];
-            final type = item['type'];
-            IconData icon = Icons.quiz_outlined;
-            Color iconColor = Colors.blueAccent;
-            
-            if (type == 'Interview') {
-              icon = Icons.video_call_outlined;
-              iconColor = Colors.purpleAccent;
-            } else if (type == 'GD') {
-              icon = Icons.forum_outlined;
-              iconColor = Colors.orangeAccent;
-            }
+    final topBranch = _overviewData!['top_performing_branch'] ?? "N/A";
+    final enrolled = (_overviewData!['total_students'] ?? 0).toString();
 
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.03),
-                borderRadius: BorderRadius.circular(16),
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _buildGlassCard(
+                "ENROLLED STUDENTS",
+                enrolled,
+                Icons.school_outlined,
+                Colors.blueAccent,
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: iconColor.withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(icon, color: iconColor, size: 20),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(item['user'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                        Text(item['detail'], style: const TextStyle(color: Colors.white38, fontSize: 11)),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(item['score'], style: TextStyle(color: iconColor, fontWeight: FontWeight.bold, fontSize: 14)),
-                      Text(_formatTime(item['time']), style: const TextStyle(color: Colors.white24, fontSize: 9)),
-                    ],
-                  ),
-                ],
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: _buildGlassCard(
+                "TOP BRANCH",
+                topBranch,
+                Icons.workspace_premium_rounded,
+                Colors.orangeAccent,
               ),
-            );
-          },
+            ),
+          ],
         ),
+        const SizedBox(height: 25),
+        _buildSectionHeader("Branch-wise Average Scores"),
+        const SizedBox(height: 15),
+        _buildBranchAveragesCarousel(),
+        const SizedBox(height: 25),
+        _buildSectionHeader("Top Students per Branch"),
+        const SizedBox(height: 15),
+        _buildTopStudentsCarousel(),
+      ],
+    );
+  }
+
+  Widget _buildBranchAveragesCarousel() {
+    final branchStats = _overviewData!['branch_performance'] as List? ?? [];
+    if (branchStats.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 100,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: branchStats.length,
+        itemBuilder: (context, index) {
+          final b = branchStats[index];
+          return Container(
+            width: 160,
+            margin: const EdgeInsets.only(right: 15),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1D1E33),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(b['branch'] ?? 'N/A', style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text("${b['avg_score']}%", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 22, color: Color(0xFF24D876))),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
 
-  String _formatTime(String isoString) {
-    try {
-      final dt = DateTime.parse(isoString);
-      final now = DateTime.now();
-      final diff = now.difference(dt);
-      if (diff.inMinutes < 60) return "${diff.inMinutes}m ago";
-      return "${diff.inHours}h ago";
-    } catch (_) {
-      return "Just now";
-    }
-  }
+  Widget _buildTopStudentsCarousel() {
+    if (_overviewData == null || _overviewData!['top_students_per_branch'] == null)
+      return const SizedBox.shrink();
 
-  Widget _buildQuickStats() {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildGlassCard(
-            "ENROLLED",
-            _overviewData!['total_students'].toString(),
-            Icons.school_outlined,
-            Colors.blueAccent,
-          ),
-        ),
-        const SizedBox(width: 15),
-        Expanded(
-          child: _buildGlassCard(
-            "ACTIVE",
-            _overviewData!['at_risk_count'].toString(),
-            Icons.crisis_alert_rounded,
-            Colors.redAccent,
-          ),
-        ),
-      ],
+    final topStudents = _overviewData!['top_students_per_branch'] as List? ?? [];
+    if (topStudents.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 120,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: topStudents.length,
+        itemBuilder: (context, index) {
+          final s = topStudents[index];
+          return Container(
+            width: 200,
+            margin: const EdgeInsets.only(right: 15),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1D1E33),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF24D876).withOpacity(0.2)),
+              gradient: LinearGradient(
+                colors: [const Color(0xFF24D876).withOpacity(0.05), Colors.transparent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.stars_rounded, color: Color(0xFF24D876), size: 16),
+                    const SizedBox(width: 8),
+                    Text(s['branch'], style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(s['username'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                Text("${s['avg_score']}% AVG", style: const TextStyle(color: Color(0xFF24D876), fontSize: 13, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -495,7 +554,13 @@ class _OverviewTabState extends State<OverviewTab> {
   }
 
   Widget _buildBranchDistribution() {
+    if (_overviewData == null || _overviewData!['branch_distribution'] == null)
+      return const SizedBox(height: 100, child: Center(child: Text("Branch data unavailable")));
+
     final dist = _overviewData!['branch_distribution'] as Map<String, dynamic>;
+    if (dist.isEmpty)
+      return const SizedBox(height: 100, child: Center(child: Text("No branch distribution data")));
+
     return Container(
       height: 280,
       padding: const EdgeInsets.all(24),
@@ -544,7 +609,8 @@ class _OverviewTabState extends State<OverviewTab> {
 // Students Tab
 // ----------------------------------------------------------------------------
 class StudentsTab extends StatefulWidget {
-  const StudentsTab({Key? key}) : super(key: key);
+  final String? teacherName;
+  const StudentsTab({Key? key, this.teacherName}) : super(key: key);
 
   @override
   _StudentsTabState createState() => _StudentsTabState();
@@ -563,7 +629,10 @@ class _StudentsTabState extends State<StudentsTab> {
     'MECH',
     'IT',
     'CSBS',
-    'AEI'
+    'AI&DS',
+    'AEI',
+    'EEE',
+    'CIVIL'
   ];
 
   @override
@@ -636,32 +705,28 @@ class _StudentsTabState extends State<StudentsTab> {
           ),
         ),
         
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-          child: Row(
-            children: _branches
-                .map((b) => Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: ChoiceChip(
-                        label: Text(b),
-                        selected: _selectedBranch == b,
-                        onSelected: (s) {
-                          if (s) {
-                            setState(() => _selectedBranch = b);
-                            _loadStudents();
-                          }
-                        },
-                        selectedColor: const Color(0xFF24D876),
-                        labelStyle: TextStyle(
-                            color: _selectedBranch == b
-                                ? Colors.black
-                                : Colors.white,
-                            fontWeight: FontWeight.bold),
-                        backgroundColor: const Color(0xFF1D1E33),
-                      ),
-                    ))
-                .toList(),
+        DefaultTabController(
+          length: _branches.length,
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Colors.white10)),
+            ),
+            child: TabBar(
+              isScrollable: true,
+              indicatorColor: const Color(0xFF24D876),
+              labelColor: const Color(0xFF24D876),
+              unselectedLabelColor: Colors.white38,
+              indicatorWeight: 3,
+              labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              tabs: _branches.map((b) => Tab(text: b)).toList(),
+              onTap: (index) {
+                setState(() {
+                  _selectedBranch = _branches[index];
+                  _loadStudents();
+                });
+              },
+            ),
           ),
         ),
         Expanded(
@@ -684,7 +749,8 @@ class _StudentsTabState extends State<StudentsTab> {
                             context,
                             MaterialPageRoute(
                                 builder: (_) => StudentDetailScreen(
-                                    username: s['username']))),
+                                    username: s['username'],
+                                    teacherName: widget.teacherName))),
                         child: Padding(
                           padding: const EdgeInsets.all(18),
                           child: Row(
@@ -834,24 +900,35 @@ class _BranchTabState extends State<BranchTab> {
                       fontWeight: FontWeight.bold, color: Colors.white54)),
               const SizedBox(width: 15),
               Expanded(
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedBranch,
-                    dropdownColor: const Color(0xFF1D1E33),
-                    items: ['CSE', 'ECE', 'MECH', 'IT', 'CSBS', 'AEI']
-                        .map((String b) {
-                      return DropdownMenuItem<String>(
-                          value: b,
-                          child: Text(b,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold)));
-                    }).toList(),
-                    onChanged: (String? val) {
-                      if (val != null) {
-                        setState(() => _selectedBranch = val);
-                        _loadBranchData();
-                      }
-                    },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1D1E33),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedBranch,
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF1D1E33),
+                      icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF24D876)),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                      items: ['CSE', 'ECE', 'MECH', 'IT', 'CSBS', 'AEI']
+                          .map((String b) {
+                        return DropdownMenuItem<String>(
+                            value: b,
+                            child: Text(b,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, color: Colors.white)));
+                      }).toList(),
+                      onChanged: (String? val) {
+                        if (val != null) {
+                          setState(() => _selectedBranch = val);
+                          _loadBranchData();
+                        }
+                      },
+                    ),
                   ),
                 ),
               ),

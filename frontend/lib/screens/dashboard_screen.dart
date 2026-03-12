@@ -19,6 +19,7 @@ import '../widgets/news_notification.dart';
 import 'login_screen.dart';
 import 'daily_report_screen.dart';
 import 'instructions_screen.dart';
+import '../widgets/teacher_message_notification.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -30,6 +31,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Map<String, dynamic>? data;
   Map<String, dynamic>? weeklyData;
   List<dynamic>? newsData;
+  List<dynamic>? _suggestions;
   bool loading = true;
   bool newsLoading = false;
   bool briefingLoading = false;
@@ -40,6 +42,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _currentNewsIndex = 0;
   final FlutterTts _flutterTts = FlutterTts();
   OverlayEntry? _newsOverlayEntry;
+  OverlayEntry? _suggestionOverlayEntry;
 
   @override
   void initState() {
@@ -57,6 +60,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _newsTimer?.cancel();
     _newsOverlayEntry?.remove();
     _newsOverlayEntry = null;
+    _suggestionOverlayEntry?.remove();
+    _suggestionOverlayEntry = null;
     super.dispose();
   }
 
@@ -117,6 +122,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (res2.statusCode == 200) weeklyData = jsonDecode(res2.body);
         });
       }
+      if (auth.username != null) {
+        final suggestionsList = await ApiConfig.fetchSuggestions(auth.username!);
+        setState(() {
+          _suggestions = suggestionsList;
+        });
+        _showUnreadSuggestions(suggestionsList);
+      }
     } catch (e) {
       debugPrint("LOAD DATA ERROR: $e");
     } finally {
@@ -137,6 +149,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
       debugPrint("NEWS ERROR: $e");
       setState(() => newsLoading = false);
     }
+  }
+
+  void _showUnreadSuggestions(List<dynamic> suggestions) {
+    final unread = suggestions.where((s) => s['is_read'] == false).toList();
+    if (unread.isNotEmpty) {
+      // Show the latest unread suggestion
+      _showSuggestionNotification(unread.first);
+    }
+  }
+
+  void _showSuggestionNotification(dynamic suggestion) {
+    if (_suggestionOverlayEntry != null) {
+      _suggestionOverlayEntry?.remove();
+      _suggestionOverlayEntry = null;
+    }
+
+    _suggestionOverlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: 50,
+        left: 20, // Different position from news to avoid overlap
+        child: TeacherMessageNotification(
+          suggestion: suggestion,
+          onDismiss: () {
+            _suggestionOverlayEntry?.remove();
+            _suggestionOverlayEntry = null;
+          },
+        ),
+      ),
+    );
+
+    Overlay.of(context).insert(_suggestionOverlayEntry!);
   }
 
   Future<void> _playIndustryBriefing() async {
@@ -182,9 +225,115 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 32),
           _buildMiddleSection(context),
           const SizedBox(height: 32),
+          const SizedBox(height: 32),
           _buildFocusAreas(),
           const SizedBox(height: 32),
           _buildBottomSection(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessagesSection() {
+    if (_suggestions == null || _suggestions!.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(height: 16),
+            const Text("No messages from teachers yet", style: TextStyle(color: Colors.white24, fontSize: 16)),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("Messages from Teachers", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+          const Text("Direct feedback and suggestions to improve your performance", style: TextStyle(color: Colors.white54, fontSize: 14)),
+          const SizedBox(height: 24),
+          Expanded(
+            child: ListView.builder(
+              itemCount: _suggestions!.length,
+              itemBuilder: (context, index) {
+                final s = _suggestions![index];
+                final bool isRead = s['is_read'] == 1 || s['is_read'] == true;
+                
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161625),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isRead ? Colors.white.withOpacity(0.05) : Colors.tealAccent.withOpacity(0.3),
+                      width: isRead ? 1 : 1.5,
+                    ),
+                    boxShadow: isRead ? [] : [
+                      BoxShadow(color: Colors.tealAccent.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))
+                    ],
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        child: const SizedBox.shrink(),
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  "Teacher: ${s['teacher'] ?? 'Academic Staff'}",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: isRead ? Colors.white70 : Colors.tealAccent,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                Text(
+                                  s['timestamp'] != null ? s['timestamp'].toString().substring(0, 10) : "",
+                                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              s['message'] ?? "",
+                              style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.5),
+                            ),
+                            const SizedBox(height: 16),
+                            if (!isRead)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () async {
+                                    await ApiConfig.markSuggestionRead(s['id']);
+                                    loadData(); // Refresh list
+                                  },
+                                   child: const Text("Mark as Read"),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.tealAccent,
+                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
@@ -224,7 +373,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(color: Colors.white.withOpacity(0.4)),
                   ),
-                  child: Text("Rank: #$branchRank", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                  child: Text(
+                    "Rank: #$branchRank in ${data?['branch'] ?? 'Branch'}", 
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)
+                  ),
                 )
               else
                 const Icon(Icons.stars, color: Colors.white, size: 40),
@@ -532,8 +684,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: 24),
         _buildGraphSection(),
-        const SizedBox(height: 24),
-        _buildTopicAccuracySection(),
       ],
     );
   }
@@ -766,6 +916,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   setState(() => _selectedIndex = 6);
                 }),
 
+                _sidebarTile(7, Icons.message_outlined, "Messages", onTap: () {
+                  setState(() => _selectedIndex = 7);
+                  loadData(); // Refresh to get latest messages
+                }),
+
                 const Spacer(),
                 _sidebarTile(-1, Icons.logout, "Logout", onTap: () {
                   final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -787,7 +942,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ? _buildNewsSection()
                 : _selectedIndex == 6
                     ? const DailyReportScreen()
-                    : _buildDashboardSection(auth),
+                    : _selectedIndex == 7
+                        ? _buildMessagesSection()
+                        : _buildDashboardSection(auth),
           ),
         ],
       ),
@@ -1072,50 +1229,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
 
-  Widget _buildTopicAccuracySection() {
-    double gdScore = 0;
-    double interviewScore = 0;
-    
-    if (weeklyData != null) {
-      final gdList = weeklyData!['gd_weekly'] as List?;
-      final invList = weeklyData!['interview_weekly'] as List?;
-      
-      if (gdList != null && gdList.isNotEmpty) {
-        gdScore = (double.tryParse(gdList.last['score'].toString()) ?? 0) / 10;
-      }
-      if (invList != null && invList.isNotEmpty) {
-        interviewScore = (double.tryParse(invList.last['score'].toString()) ?? 0) / 10;
-      }
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(25),
-      decoration: BoxDecoration(color: const Color(0xFF161625), borderRadius: BorderRadius.circular(20)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text("Weekly Session Highlights", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-          _topicBar("GD Performance (Last Session)", gdScore, Colors.orangeAccent),
-          _topicBar("Interview Confidence (Last Session)", interviewScore, Colors.greenAccent),
-        ],
-      ),
-    );
-  }
-
-  Widget _topicBar(String label, double val, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 15),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          const SizedBox(height: 8),
-          LinearProgressIndicator(value: val, backgroundColor: Colors.white10, color: color, minHeight: 8),
-        ],
-      ),
-    );
-  }
 
   void _startQuiz(BuildContext context, String cat) async {
     Navigator.push(
@@ -1669,14 +1782,21 @@ class _TrendsSidePanelState extends State<_TrendsSidePanel>
               else
                 ...widget.items.map((item) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(width: 4, height: 4, margin: const EdgeInsets.fromLTRB(0, 6, 8, 0),
-                          decoration: const BoxDecoration(color: Colors.purpleAccent, shape: BoxShape.circle)),
-                      Expanded(child: Text(item['title'] ?? '', maxLines: 2, overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4))),
-                    ],
+                  child: InkWell(
+                    onTap: () {
+                      _dismiss();
+                      showNewsSummaryDialog(context, item);
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(width: 4, height: 4, margin: const EdgeInsets.fromLTRB(0, 6, 8, 0),
+                            decoration: const BoxDecoration(color: Colors.purpleAccent, shape: BoxShape.circle)),
+                        Expanded(child: Text(item['title'] ?? '', maxLines: 2, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4))),
+                      ],
+                    ),
                   ),
                 )),
             ],
@@ -1692,7 +1812,7 @@ void showNewsSummaryDialog(BuildContext context, dynamic item) {
     context: context,
     barrierDismissible: true,
     builder: (context) => FutureBuilder<String>(
-      future: ApiConfig.fetchNewsSummary(item['title'] ?? ''),
+      future: ApiConfig.fetchNewsSummary(item['title'] ?? '', url: item['url']),
       builder: (context, snapshot) {
         return AlertDialog(
           backgroundColor: const Color(0xFF161625),
@@ -1706,7 +1826,10 @@ void showNewsSummaryDialog(BuildContext context, dynamic item) {
                 ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () {
+                ApiConfig.stopSpeech();
+                Navigator.pop(context);
+              },
               child: const Text("Close", style: TextStyle(color: Colors.purpleAccent)),
             ),
             if (item['url'] != null)

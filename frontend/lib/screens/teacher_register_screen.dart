@@ -10,6 +10,7 @@ class TeacherRegisterScreen extends StatefulWidget {
 
 class _TeacherRegisterScreenState extends State<TeacherRegisterScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _secretCodeController = TextEditingController();
@@ -28,6 +29,7 @@ class _TeacherRegisterScreenState extends State<TeacherRegisterScreen> {
 
     try {
       await TeacherApiService.register(
+        _usernameController.text.trim(),
         _emailController.text.trim(),
         _passwordController.text,
         _secretCodeController.text.trim(),
@@ -105,6 +107,23 @@ class _TeacherRegisterScreenState extends State<TeacherRegisterScreen> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 32),
+                        TextFormField(
+                          controller: _usernameController,
+                          decoration: InputDecoration(
+                            labelText: 'Username',
+                            prefixIcon: const Icon(Icons.person),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Please enter a username';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
                         TextFormField(
                           controller: _emailController,
                           decoration: InputDecoration(
@@ -239,6 +258,7 @@ class _TeacherRegisterScreenState extends State<TeacherRegisterScreen> {
 
   @override
   void dispose() {
+    _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _secretCodeController.dispose();

@@ -6,6 +6,8 @@ import os
 import random
 import traceback
 import sys
+import smtplib
+from email.message import EmailMessage
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -32,10 +34,33 @@ from database import get_db, init_db, test_connection, SessionLocal, mysql_engin
 
 # --- MODELS ---
 class UserAuth(BaseModel):
+    username: str # Changed to email or username depending on logic, keeping username for backward compat
+    password: str
+    branch: Optional[str] = None
+    role: Optional[str] = 'student'
+
+class SendOTPRequest(BaseModel):
+    email: str
     username: str
     password: str
     branch: Optional[str] = None
     role: Optional[str] = 'student'
+
+class VerifyOTPRequest(BaseModel):
+    email: str
+    otp_code: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+    username: str
+    branch: Optional[str] = None
+    role: str = 'student'
+    secret_code: Optional[str] = None
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    otp_code: str
+    new_password: str
 
 class QuizRequest(BaseModel):
     username: str
@@ -66,6 +91,10 @@ class QuizResult(BaseModel):
 class UpdateBranchRequest(BaseModel):
     username: str
     branch: str
+
+class GDBonusRequest(BaseModel):
+    username: str
+    gd_score: float  # numeric score (0–10) from the GD session
 
 # Load Whisper model once at startup
 stt_model = whisper.load_model("base")
@@ -275,9 +304,9 @@ def get_user_level(db: Session, username: str, category: str):
     else:
         return "Company-level"
 
-def get_todays_questions(db: Session, username: str, category: str, target_branch: str = None):
-    """Get 10 questions for today - avoiding repeats from previous days"""
-    today = get_ist_date()
+def get_todays_questions(db: Session, username: str, category: str, target_branch: str = None, for_date: date = None):
+    """Get 10 questions for a specific date (defaults to today) - avoiding repeats from previous days"""
+    today = for_date or get_ist_date()
     
     # If target_branch is provided and DOES NOT MATCH user's branch, do NOT cache/use daily_quiz
     # This is "Practice Mode"
@@ -757,6 +786,65 @@ async def trigger_daily_generation():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/gd_bonus", tags=["Quiz System"])
+async def apply_gd_bonus(request: GDBonusRequest, db: Session = Depends(get_db)):
+    """
+    Apply the GD level bonus to technical_progress.
+
+    RULES
+    ─────
+    • Only triggered when gd_score > 5.
+    • +8% technical_progress logic.
+    • Bonus is cumulative across sessions.
+    """
+    from models import User
+    
+    username  = request.username.strip()
+    gd_score  = request.gd_score
+    
+    if gd_score <= 5:
+        return {
+            "bonus_applied": False,
+            "level_up":      False,
+            "message":       "Score <= 5 — no bonus awarded.",
+        }
+
+    # Apply the +8% bonus
+    try:
+        user_obj = db.query(User).filter(User.username == username).first()
+        if not user_obj:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        level_up = False
+        user_obj.technical_progress = (user_obj.technical_progress or 0.0) + 8.0
+        if user_obj.technical_progress >= 100.0:
+            if user_obj.technical_level < 4:
+                user_obj.technical_level    += 1
+                user_obj.technical_progress  = 0.0
+                level_up = True
+            else:
+                user_obj.technical_progress = 100.0   # cap at max level
+        
+        db.commit()
+        print(f"✅ GD +8% bonus applied for {username}. Level up: {level_up}")
+
+        return {
+            "bonus_applied": True,
+            "level_up":      level_up,
+            "message": (
+                "Level Up! You've advanced to the next difficulty."
+                if level_up else
+                "GD bonus applied! Progress +8%."
+            ),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"GD BONUS ERROR: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- ROUTES ---
 
 @app.post("/register", tags=["Authentication"])
@@ -786,19 +874,245 @@ async def register(user: UserAuth, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/auth/send-otp", tags=["Authentication"])
+async def send_otp(request: SendOTPRequest, db: Session = Depends(get_db)):
+    """Generate and send an OTP for registration"""
+    from models import User, OTPVerification
+    import re
+    try:
+        if request.role.lower() == 'student':
+            email_pattern = r'^u\d{7}@rajagiri\.edu\.in$'
+            if not re.match(email_pattern, request.email.lower().strip()):
+                 raise HTTPException(status_code=400, detail="Student email must be in the format u*******@rajagiri.edu.in (u followed by 7 digits).")
+            
+        # Check if user already exists (by email or username)
+        existing_user = db.query(User).filter(
+            (User.username == request.username.strip()) | 
+            (User.email == request.email.strip())
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User with this email or username already exists.")
+            
+        # Generate 6-digit OTP
+        otp = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+        
+        # Save to database
+        db.query(OTPVerification).filter(OTPVerification.email == request.email.strip()).delete()
+        
+        expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+        new_otp = OTPVerification(
+            email=request.email.strip(),
+            otp_code=otp,
+            username=request.username.strip(),
+            password_hash=request.password,
+            branch=request.branch,
+            role=request.role.lower(),
+            expires_at=expires
+        )
+        db.add(new_otp)
+        db.commit()
+        
+        # Send Email
+        sender_email = os.environ.get("SMTP_EMAIL", "student1dev1rajagiri@gmail.com") # example default
+        sender_password = os.environ.get("SMTP_PASSWORD", "")
+        
+        if not sender_password:
+            print("WARNING: No SMTP_PASSWORD set, skipping email send and just printing OTP to console.")
+            print(f"DEBUG ONLY: OTP for {request.email} is {otp}")
+            return {"status": "success", "message": "OTP sent."}
+            
+        msg = EmailMessage()
+        msg.set_content(f"Hello {request.username},\n\nYour AI Placement Assistant verification code is: {otp}\n\nThis code is valid for 5 minutes.\n\nThanks,\nPlacement Team")
+        msg['Subject'] = 'Your Placement Assistant Verification Code'
+        msg['From'] = sender_email
+        msg['To'] = request.email.strip()
+        
+        try:
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+            server.quit()
+        except Exception as e:
+            print(f"SMTP Error: {e}")
+            raise HTTPException(status_code=500, detail="Failed to send email. Check SMTP credentials.")
+        
+        return {"status": "success", "message": "OTP sent to your email."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/auth/verify-otp-register", tags=["Authentication"])
+async def verify_otp_register(request: VerifyOTPRequest, db: Session = Depends(get_db)):
+    """Verify OTP and create user account"""
+    from models import User, OTPVerification
+    try:
+        otp_record = db.query(OTPVerification).filter(OTPVerification.email == request.email.strip()).first()
+        
+        if not otp_record:
+            raise HTTPException(status_code=400, detail="No pending registration found.")
+            
+        if otp_record.otp_code != request.otp_code.strip():
+            raise HTTPException(status_code=400, detail="Invalid OTP code.")
+            
+        if datetime.now(timezone.utc) > otp_record.expires_at.replace(tzinfo=timezone.utc):
+            db.delete(otp_record)
+            db.commit()
+            raise HTTPException(status_code=400, detail="OTP has expired. Request a new one.")
+            
+        # Create user
+        new_user = User(
+            username=otp_record.username,
+            email=otp_record.email,
+            password_hash=otp_record.password_hash,
+            aptitude_level=1,
+            technical_level=1,
+            branch=otp_record.branch,
+            role=otp_record.role
+        )
+        
+        db.add(new_user)
+        db.delete(otp_record)
+        db.commit()
+        return {"status": "success", "message": "Registration successful"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/auth/forgot-password-otp", tags=["Authentication"])
+async def forgot_password_otp(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """Generate and send an OTP for password reset"""
+    from models import User, OTPVerification
+    import re
+    try:
+        if request.role.lower() == 'student':
+            email_pattern = r'^u\d{7}@rajagiri\.edu\.in$'
+            if not re.match(email_pattern, request.email.lower().strip()):
+                 raise HTTPException(status_code=400, detail="Student email must be in the format u*******@rajagiri.edu.in (u followed by 7 digits).")
+
+        # Verify strict matching Criteria
+        query = db.query(User).filter(
+            User.email == request.email.strip(),
+            User.username == request.username.strip().upper(),
+            User.role == request.role.lower()
+        )
+        
+        if request.role.lower() == 'student':
+            query = query.filter(User.branch == request.branch)
+        elif request.role.lower() == 'teacher':
+            # Teachers must provide the exact secret code to reset
+            expected_secret = os.getenv("TEACHER_SECRET_CODE", "admin123")
+            if request.secret_code != expected_secret:
+                raise HTTPException(status_code=403, detail="Invalid Secret Access Code for Teacher.")
+            
+        user = query.first()
+        
+        if not user:
+             raise HTTPException(status_code=404, detail="No matching account found with these exact details.")
+             
+        # Generate 6-digit OTP
+        otp = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+        
+        # Save to database (we reuse the OTPVerification table, password_hash isn't strictly needed here but we fill it to pass constraints or use a dummy)
+        db.query(OTPVerification).filter(OTPVerification.email == request.email.strip()).delete()
+        
+        expires = datetime.now(timezone.utc) + timedelta(minutes=5)
+        new_otp = OTPVerification(
+            email=request.email.strip(),
+            otp_code=otp,
+            username=user.username,
+            password_hash="RESET", # Dummy value since we aren't creating a new user
+            branch=user.branch,
+            role=user.role,
+            expires_at=expires
+        )
+        db.add(new_otp)
+        db.commit()
+        
+        # Send Email
+        sender_email = os.environ.get("SMTP_EMAIL", "student1dev1rajagiri@gmail.com") 
+        sender_password = os.environ.get("SMTP_PASSWORD", "")
+        
+        if not sender_password:
+            print("WARNING: No SMTP_PASSWORD set, skipping email send and printing OTP to console.")
+            print(f"DEBUG ONLY: Password Reset OTP for {request.email} is {otp}")
+            return {"status": "success", "message": "OTP sent."}
+            
+        msg = EmailMessage()
+        msg.set_content(f"Hello {request.username.upper()},\n\nYou requested a password reset. Your verification code is: {otp}\n\nThis code is valid for 5 minutes.\n\nThanks,\nPlacement Team")
+        msg['Subject'] = 'Your Password Reset Code'
+        msg['From'] = sender_email
+        msg['To'] = request.email.strip()
+        
+        try:
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+            server.quit()
+        except Exception as e:
+            print(f"SMTP Error: {e}")
+            raise HTTPException(status_code=500, detail="Failed to send email. Check SMTP credentials.")
+        
+        return {"status": "success", "message": "Password reset OTP sent to your email."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/auth/reset-password", tags=["Authentication"])
+async def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Verify OTP and update user password"""
+    from models import User, OTPVerification
+    try:
+        otp_record = db.query(OTPVerification).filter(OTPVerification.email == request.email.strip()).first()
+        
+        if not otp_record:
+            raise HTTPException(status_code=400, detail="No pending password reset request found.")
+            
+        if otp_record.otp_code != request.otp_code.strip():
+            raise HTTPException(status_code=400, detail="Invalid OTP code.")
+            
+        if datetime.now(timezone.utc) > otp_record.expires_at.replace(tzinfo=timezone.utc):
+            db.delete(otp_record)
+            db.commit()
+            raise HTTPException(status_code=400, detail="OTP has expired. Request a new one.")
+            
+        # Find user and update password
+        user = db.query(User).filter(User.email == request.email.strip()).first()
+        if not user:
+             raise HTTPException(status_code=404, detail="User account not found.")
+             
+        user.password_hash = request.new_password
+        
+        db.delete(otp_record)
+        db.commit()
+        return {"status": "success", "message": "Password successfully reset. You can now login."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/login", tags=["Authentication"])
 async def login(user: UserAuth, db: Session = Depends(get_db)):
-    """Login user"""
+    """Login user via email or username"""
     try:
+        # Check by email OR username (user.username actually holds the input)
         result = db.execute(
-            text("SELECT username, password_hash FROM users WHERE username = :username"),
+            text("SELECT username, password_hash FROM users WHERE (email = :username OR username = :username)"),
             {"username": user.username.strip()}
         )
         row = result.fetchone()
         
         if row and row[1] == user.password:
             # Trigger weekly level up check on login
-            process_weekly_level_up(user.username.strip(), db)
+            process_weekly_level_up(row[0], db) # use actual username
             return {"status": "success", "username": row[0]}
         raise HTTPException(status_code=401, detail="Invalid credentials")
     except HTTPException:
@@ -832,25 +1146,87 @@ async def update_branch(request: UpdateBranchRequest, db: Session = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/get_daily_quiz", tags=["Quiz System"])
-async def get_daily_quiz(request: QuizRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def get_daily_quiz(
+    request: QuizRequest, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db)
+):
     """
-    Get today's 10 questions
-    - Same questions for entire day
-    - Resets at midnight
+    Get questions for today (or the earliest missed day this week).
+
+    MISSED-QUIZ LOGIC
+    ─────────────────
+    • Week  = Monday … Sunday (IST).
+    • Scans from Monday up to (not including) today.
+    • The FIRST day with no completed result for this category is returned
+      as the catch-up target date.
+    • After Sunday resets — prior-week misses are silently dropped.
     """
     try:
-        question_ids = get_todays_questions(db, request.username, request.category, request.target_branch)
+        today  = get_ist_date()
+        monday = today - timedelta(days=today.weekday())  # Monday of current ISO week
+        target_date = today  # default: no misses, serve today
+
+        # ── Practice-mode detection ────────────────────────────────────
+        user_row = db.execute(
+            text("SELECT branch FROM users WHERE username = :u"),
+            {"u": request.username.strip()}
+        ).fetchone()
+        user_actual_branch = user_row[0] if user_row else None
+
+        is_practice_mode = (
+            request.category.lower() == "technical" 
+            and request.target_branch 
+            and request.target_branch != user_actual_branch
+        )
+
+        # ── Missed-quiz scan (current week only, skip for practice) ────
+        if not is_practice_mode:
+            check_day = monday
+            while check_day < today:
+                completed = db.execute(
+                    text("""
+                        SELECT COUNT(*) FROM results 
+                        WHERE username = :u 
+                          AND category  = :cat
+                          AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) = :d
+                    """),
+                    {
+                        "u":   request.username.strip(), 
+                        "cat": request.category.upper(), 
+                        "d":   check_day,
+                    }
+                ).scalar() or 0
+
+                if completed == 0:
+                    target_date = check_day
+                    print(
+                        f"📅 Catch-up quiz [{request.category}] for "
+                        f"{request.username}: serving {target_date}"
+                    )
+                    break  # stop at the FIRST missed day
+                
+                check_day += timedelta(days=1)
         
-        # Proactively generate explanations for any questions that lack them
+        # ── Fetch / generate question IDs ──────────────────────────────
+        question_ids = get_todays_questions(
+            db, 
+            request.username, 
+            request.category, 
+            request.target_branch, 
+            for_date=target_date
+        )
+        
         background_tasks.add_task(ensure_explanations_exist, question_ids)
-        
         questions = get_questions_by_ids(db, question_ids)
         
-        # Send full details to frontend
+        is_catchup = target_date < today
         
         return {
             "status": "success",
-            "date": str(get_ist_date()),
+            "date": str(target_date),
+            "is_catchup": is_catchup,
+            "catchup_for": str(target_date) if is_catchup else None,
             "difficulty": get_user_level(db, request.username, request.category),
             "questions": questions,
             "total": len(questions)
@@ -944,8 +1320,36 @@ async def submit_quiz(submission: QuizCompleteSubmission, db: Session = Depends(
             
             db.commit()
             
-            # Level up logic removed from here (now weekly on Sundays)
-            level_up = False 
+            # ── CUMULATIVE LEVELING LOGIC ──────────────────────────────────
+            # +6% per quiz attempt where score >= 7 (Aptitude or Technical).
+            # Only the category that was quizzed gets the progress boost.
+            # Bonus is repeatable: every qualifying attempt adds +6%.
+            from models import User
+            level_up = False
+            if submission.score >= 7:
+                user_obj = db.query(User).filter(User.username == submission.username).first()
+                if user_obj:
+                    if submission.category.upper() == "APTITUDE":
+                        user_obj.aptitude_progress = (user_obj.aptitude_progress or 0.0) + 6.0
+                        if user_obj.aptitude_progress >= 100.0:
+                            if user_obj.aptitude_level < 4:
+                                user_obj.aptitude_level += 1
+                                user_obj.aptitude_progress = 0.0   # reset for next level
+                                level_up = True
+                            else:
+                                user_obj.aptitude_progress = 100.0  # cap at max level
+                                
+                    elif submission.category.upper() == "TECHNICAL":
+                        user_obj.technical_progress = (user_obj.technical_progress or 0.0) + 6.0
+                        if user_obj.technical_progress >= 100.0:
+                            if user_obj.technical_level < 4:
+                                user_obj.technical_level += 1
+                                user_obj.technical_progress = 0.0
+                                level_up = True
+                            else:
+                                user_obj.technical_progress = 100.0
+
+                    db.commit()
             
             return {
                 "status": "success",
@@ -953,7 +1357,11 @@ async def submit_quiz(submission: QuizCompleteSubmission, db: Session = Depends(
                 "total": submission.total_questions,
                 "percentage": round(percentage, 1),
                 "level_up": level_up,
-                "message": "Great job! Level up!" if level_up else "Keep practicing!"
+                "message": (
+                    "Level Up! You've advanced to the next difficulty." if level_up 
+                    else "Progress +6%! Keep going!" if submission.score >= 7 
+                    else "Keep practicing!"
+                )
             }
         else:
             return {
@@ -1123,69 +1531,29 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
         if int_res and int_res[0] and int_res[0] >= 8.5 and int_res[1] >= 3:
             badges.append({"name": "Interview Ace", "icon": "work", "color": "purple"})
 
-        # 6. Branch Rank Calculation
-        # To determine rank, we fetch the branch leaderboard and find this user's position
-        user_res = db.execute(
-            text("SELECT branch FROM users WHERE username = :username"),
-            {"username": username.strip()}
-        ).fetchone()
+        # 7. Optimized Branch Rank Calculation
         branch_rank = 0
-        if user_res and user_res[0]:
-            user_branch = user_res[0]
-            # Fast inline fetch of leaderboard logic for rank calculation
-            all_users = db.execute(
-                text("SELECT username FROM users WHERE branch = :b AND role = 'student'"),
-                {"b": user_branch}
-            ).fetchall()
+        user_res = db.execute(text("SELECT branch FROM users WHERE username = :u"), {"u": username.strip()}).fetchone()
+        user_branch = user_res[0] if user_res else None
+        if user_branch:
+            # Use CTE for leaderboard to calculate rank based on average score
+            rankings_res = db.execute(text("""
+                SELECT username, rank_val FROM (
+                    SELECT 
+                        u.username,
+                        AVG(r.score * 10) as avg_p,
+                        RANK() OVER (ORDER BY AVG(r.score * 10) DESC) as rank_val
+                    FROM users u
+                    JOIN results r ON u.username = r.username
+                    WHERE u.branch = :branch AND u.role = 'student'
+                    GROUP BY u.username
+                ) as leaderboard
+                WHERE username = :username
+            """), {"branch": user_branch, "username": username.strip()}).fetchone()
             
-            ranks = []
-            for u_row in all_users:
-                uname = u_row[0]
-                u_streak = 0
-                u_curr = get_ist_date()
-                while True:
-                    cnt = db.execute(
-                        text("SELECT COUNT(*) FROM results WHERE username = :u AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) = :d"),
-                        {"u": uname, "d": u_curr}
-                    ).fetchone()[0]
-                    if cnt > 0:
-                        u_streak += 1
-                        u_curr -= timedelta(days=1)
-                    else:
-                        break
-                
-                u_avg_res = db.execute(
-                    text("SELECT AVG(score) FROM results WHERE username = :u AND timestamp >= DATE_SUB(Now(), INTERVAL 7 DAY)"),
-                    {"u": uname}
-                ).scalar()
-                u_latest_avg = float(u_avg_res or 0)
-                
-                # Fetch retries for penalty correctly
-                totals_res = db.execute(
-                    text("""
-                        SELECT 
-                            COUNT(*) as total_attempts,
-                            COUNT(DISTINCT DATE(timestamp)) as unique_days
-                        FROM results 
-                        WHERE username = :u AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                    """),
-                    {"u": uname}
-                ).fetchone()
-                
-                unq_days = totals_res[1] or 0
-                tot_att = totals_res[0] or 0
-                retries = max(0, tot_att - unq_days)
-                
-                # Formula with penalty
-                u_readiness = max(0, min(100, (u_latest_avg * 8.5) + (min(u_streak, 7) * 2.1) - (retries * 0.5)))
-                ranks.append((uname, u_readiness))
-            
-            ranks.sort(key=lambda x: x[1], reverse=True)
-            for idx, (ranked_uname, _) in enumerate(ranks):
-                if ranked_uname.lower() == username.strip().lower():
-                    branch_rank = idx + 1
-                    break
-            badges.append({"name": "Interview Ace", "icon": "face", "color": "purple"})
+            if rankings_res:
+                branch_rank = rankings_res[1]
+
 
         # 6. Calculate status and Readiness
         avg_res = db.execute(
@@ -1278,7 +1646,7 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
         try:
             gd_query = db.execute(
                 text("""
-                    SELECT id, final_score, communication_score, content_score, topic_id
+                    SELECT id, final_score, communication_score, content_score, topic_id, timestamp
                     FROM gd_results 
                     WHERE username = :u 
                     AND (
@@ -1296,6 +1664,7 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
                     "communication_score": float(row[2]) if row[2] else 0.0,
                     "content_score": float(row[3]) if row[3] else 0.0,
                     "topic_id": int(row[4]) if row[4] else 0,
+                    "timestamp": str(row[5]) if row[5] else "",
                 })
         except Exception as e:
             print(f"DEBUG: Could not fetch GD results, perhaps missing column. Error: {e}")
@@ -1583,6 +1952,32 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
                 for row in res_lw
             ]
 
+        # 8. Branch Rank Calculation
+        if user.branch:
+            # Optimized Rank Calculation inclusive of all students in the branch
+            rankings_res = db.execute(text("""
+                SELECT username, rank_val FROM (
+                    SELECT 
+                        u.username,
+                        COALESCE(AVG(r.score * 10), 0) as avg_p,
+                        RANK() OVER (ORDER BY COALESCE(AVG(r.score * 10), 0) DESC, u.created_at ASC) as rank_val
+                    FROM users u
+                    LEFT JOIN results r ON u.username = r.username
+                    WHERE u.branch = :branch AND u.role = 'student'
+                    GROUP BY u.username
+                ) as leaderboard
+                WHERE username = :username
+            """), {"branch": user.branch, "username": username.strip()}).fetchone()
+            
+            if rankings_res:
+                branch_rank = rankings_res[1]
+            
+            total_branch_students = db.execute(
+                text("SELECT COUNT(*) FROM users WHERE branch = :branch AND role = 'student'"),
+                {"branch": user.branch}
+            ).scalar() or 0
+
+
         return {
             "id": user.id,
             "username": user.username,
@@ -1604,7 +1999,9 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
             "total_attempts": total_attempts,
             "accuracy": round(accuracy, 1),
             "current_week_daily": current_week_daily,
-            "last_week_daily": last_week_daily
+            "last_week_daily": last_week_daily,
+            "branch_rank": branch_rank,
+            "total_branch_students": total_branch_students
         }
     except HTTPException:
         raise
@@ -1690,11 +2087,29 @@ Rules:
         db.add(detail)
         db.commit()
 
+        # ── INTERVIEW LEVEL BONUS: +8% for score > 5 ──
+        # Bonus is cumulative across sessions.
+        from models import User
+        level_up = False
+        if score_val > 5:
+            user_obj = db.query(User).filter(User.username == username).first()
+            if user_obj:
+                user_obj.technical_progress = (user_obj.technical_progress or 0.0) + 8.0
+                if user_obj.technical_progress >= 100.0:
+                    if user_obj.technical_level < 4:
+                        user_obj.technical_level += 1
+                        user_obj.technical_progress = 0.0
+                        level_up = True
+                    else:
+                        user_obj.technical_progress = 100.0  # cap at max level
+                db.commit()
+
         return {
             "status": "success",
             "score": data.get("score", "5/10"),
             "feedback": data.get("feedback", ""),
-            "ideal_answer": data.get("ideal_answer", "")
+            "ideal_answer": data.get("ideal_answer", ""),
+            "level_up": level_up
         }
 
     except Exception as e:
@@ -2532,8 +2947,19 @@ async def get_session_detail(category: str, session_id: int, db: Session = Depen
             from models import GDResult
             res = db.query(GDResult).filter(GDResult.id == session_id).first()
             if not res: return {"error": "Not found"}
+            # Fetch real topic text
+            topic_text = "GD Topic"
+            try:
+                topic_row = db.execute(
+                    text("SELECT topic FROM gd_topics WHERE id = :tid"),
+                    {"tid": res.topic_id}
+                ).fetchone()
+                if topic_row:
+                    topic_text = topic_row[0]
+            except Exception:
+                pass
             return {
-                "topic": "GD Topic", # Need to fetch from GDTopic if needed
+                "topic": topic_text,
                 "transcript": res.user_answer,
                 "feedback": res.feedback,
                 "ideal_answer": res.ideal_answer,
@@ -2580,11 +3006,15 @@ async def get_session_detail(category: str, session_id: int, db: Session = Depen
             for ans in answers:
                 q = db.query(Question).filter(Question.id == ans.question_id).first()
                 if q:
+                    # Return None if user didn't select anything (empty string or None)
+                    user_pick = ans.user_answer if ans.user_answer and ans.user_answer.strip() else None
+                    is_skipped = user_pick is None
                     detailed_qs.append({
                         "question": q.question,
-                        "user_selected": ans.user_answer,
+                        "user_selected": user_pick,
+                        "is_skipped": is_skipped,
                         "correct_answer": q.correct_answer,
-                        "is_correct": bool(ans.is_correct),
+                        "is_correct": bool(ans.is_correct) and not is_skipped,
                         "explanation": q.explanation,
                         "options": [q.option_a, q.option_b, q.option_c, q.option_d]
                     })
@@ -2598,6 +3028,49 @@ async def get_session_detail(category: str, session_id: int, db: Session = Depen
     except Exception as e:
         print(f"SESSION DETAIL ERROR: {e}")
         return {"error": str(e)}
+
+@app.get("/suggestions/{username}", tags=["Student Insights"])
+def get_user_suggestions(username: str, db: Session = Depends(get_db)):
+    """Get all suggestions sent to this student by teachers."""
+    try:
+        from models import TeacherSuggestion
+        suggestions = db.query(TeacherSuggestion).filter(
+            TeacherSuggestion.student_username == username
+        ).order_by(TeacherSuggestion.timestamp.desc()).all()
+        
+        return {
+            "status": "success",
+            "suggestions": [
+                {
+                    "id": s.id,
+                    "teacher": s.teacher_username,
+                    "message": s.message,
+                    "is_read": bool(s.is_read),
+                    "timestamp": s.timestamp.isoformat() if s.timestamp else None
+                }
+                for s in suggestions
+            ]
+        }
+    except Exception as e:
+        print(f"GET SUGGESTIONS ERROR: {e}")
+        return {"status": "error", "error": str(e)}
+
+@app.post("/suggestions/{suggestion_id}/read", tags=["Student Insights"])
+def mark_suggestion_as_read(suggestion_id: int, db: Session = Depends(get_db)):
+    """Mark a specific teacher suggestion as read."""
+    try:
+        from models import TeacherSuggestion
+        suggestion = db.query(TeacherSuggestion).filter(TeacherSuggestion.id == suggestion_id).first()
+        if not suggestion:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        
+        suggestion.is_read = 1
+        db.commit()
+        return {"status": "success", "message": "Suggestion marked as read"}
+    except Exception as e:
+        db.rollback()
+        print(f"MARK SUGGESTION READ ERROR: {e}")
+        return {"status": "error", "error": str(e)}
 
 @app.get("/", tags=["Root"])
 def root():

@@ -8,6 +8,8 @@ import 'register_screen.dart';
 import 'branch_selection_screen.dart';
 import 'teacher_dashboard_screen.dart';
 
+import 'forgot_password_screen.dart';
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -19,6 +21,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _userController = TextEditingController();
   final _passController = TextEditingController();
   String _selectedRole = "Student"; // To track role selection
+  bool _obscurePassword = true;
 
   @override
   Widget build(BuildContext context) {
@@ -50,7 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const Icon(Icons.school, size: 60, color: Colors.white),
                   const SizedBox(height: 20),
                   const Text(
-                    "AI Placement Assistant",
+                    "AceAIre - AI Placement Assistant",
                     style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
                   const Text(
@@ -94,15 +97,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 25),
 
                     // Input Fields
-                    _buildTextField("Email Address", _userController, Icons.email_outlined),
+                    _buildTextField(_selectedRole == "Student" ? "College Email (@rajagiri.edu.in)/ Username" : "Username / Email", _userController, _selectedRole == "Student" ? Icons.email_outlined : Icons.account_circle_outlined),
                     const SizedBox(height: 20),
                     _buildTextField("Password", _passController, Icons.lock_outline, isPassword: true),
 
                     const SizedBox(height: 15),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(onPressed: () {}, child: const Text("Forgot Password?", style: TextStyle(color: accentColor))),
-                    ),
 
                     const SizedBox(height: 20),
                     // Login button with role-based authentication
@@ -201,10 +200,17 @@ class _LoginScreenState extends State<LoginScreen> {
                           );
                         }
                       },
-                      child: Text("Sign In as $_selectedRole", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      child: Text("Sign In as $_selectedRole", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
                     ),
 
                     const SizedBox(height: 20),
+                    Center(
+                      child: TextButton(
+                        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ForgotPasswordScreen())),
+                        child: const Text("Forgot Password?", style: TextStyle(color: Colors.redAccent)),
+                      ),
+                    ),
+
                     Center(
                       child: TextButton(
                         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen())),
@@ -254,10 +260,16 @@ class _LoginScreenState extends State<LoginScreen> {
         const SizedBox(height: 8),
         TextField(
           controller: controller,
-          obscureText: isPassword,
+          obscureText: isPassword && _obscurePassword,
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
             prefixIcon: Icon(icon, color: Colors.white38),
+            suffixIcon: isPassword 
+              ? IconButton(
+                  icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: Colors.white38),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                )
+              : null,
             filled: true,
             fillColor: Colors.white.withOpacity(0.05),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
@@ -290,5 +302,12 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _userController.dispose();
+    _passController.dispose();
+    super.dispose();
   }
 }

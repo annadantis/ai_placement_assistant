@@ -50,7 +50,10 @@ class _NewsNotificationState extends State<NewsNotification> with SingleTickerPr
     if (summary == null) {
       setState(() => loadingSummary = true);
       try {
-        final result = await ApiConfig.fetchNewsSummary(widget.item['title'] ?? '');
+        final result = await ApiConfig.fetchNewsSummary(
+          widget.item['title'] ?? '',
+          url: widget.item['url'],
+        );
         setState(() {
           summary = result;
           loadingSummary = false;
@@ -154,7 +157,10 @@ class _NewsNotificationState extends State<NewsNotification> with SingleTickerPr
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
-                      onPressed: widget.onDismiss,
+                      onPressed: () {
+                        ApiConfig.stopSpeech();
+                        widget.onDismiss();
+                      },
                       child: const Text("Got it"),
                     ),
                   ),

@@ -91,9 +91,34 @@ def init_db():
         from models import (
             User, Score, Question, GDEvaluation, WeeklyStat, 
             GDTopic, GDResult, InterviewDetail, QuizAnswer, 
-            InterviewQuestion, UserAskedQuestion
+            InterviewQuestion, UserAskedQuestion, TeacherSuggestion,
+            OTPVerification
         )
         Base.metadata.create_all(bind=mysql_engine)
+        
+        # Ensure teacher_username column exists (handle existing tables from older versions)
+        # Standard MySQL doesn't support "ADD COLUMN IF NOT EXISTS"
+        try:
+            with mysql_engine.connect() as conn:
+                # 1. Check if column exists
+                check_sql = text("""
+                    SELECT COUNT(*) FROM information_schema.columns 
+                    WHERE table_schema = :db_name 
+                    AND table_name = 'teacher_suggestions' 
+                    AND column_name = 'teacher_username'
+                """)
+                column_exists = conn.execute(check_sql, {"db_name": DB_NAME}).scalar() > 0
+                
+                if not column_exists:
+                    print(f"🔧 Migrating: Adding 'teacher_username' column to 'teacher_suggestions' table...")
+                    conn.execute(text("ALTER TABLE teacher_suggestions ADD COLUMN teacher_username VARCHAR(255) AFTER id"))
+                    conn.commit()
+                    print("✅ Migration successful!")
+                else:
+                    print("✅ Column 'teacher_username' already exists.")
+        except Exception as e:
+            print(f"Migration Note: {e}")
+
         print("Database tables created/verified successfully")
     except Exception as e:
         print(f"Error creating database tables: {e}")

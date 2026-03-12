@@ -23,12 +23,13 @@ class TeacherApiService {
   }
 
   // Teacher Registration
-  static Future<Map<String, dynamic>> register(String username, String password, String secretCode) async {
+  static Future<Map<String, dynamic>> register(String username, String email, String password, String secretCode) async {
     final response = await http.post(
       Uri.parse('$baseUrl/teacher/register'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'username': username,
+        'email': email,
         'password': password,
         'secret_code': secretCode,
       }),
@@ -185,4 +186,39 @@ class TeacherApiService {
       throw Exception('Failed to load live pulse activity');
     }
   }
+
+  // Send Suggestion to Student (New)
+  static Future<Map<String, dynamic>> sendSuggestion(String studentUsername, String teacherUsername, String message) async {
+    print("DEBUG: Sending suggestion from $teacherUsername to $studentUsername");
+    final response = await http.post(
+      Uri.parse('$baseUrl/teacher/students/$studentUsername/suggest'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'teacher_username': teacherUsername,
+        'message': message,
+      }),
+    );
+
+    print("DEBUG: Suggestion response status: ${response.statusCode}");
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Failed to send suggestion: ${response.body}');
+    }
+  }
+
+  // Get Suggestions sent to a specific student (New)
+  static Future<List<dynamic>> getSuggestions(String studentUsername) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/suggestions/$studentUsername'),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return data['suggestions'] ?? [];
+    } else {
+      throw Exception('Failed to fetch suggestions: ${response.body}');
+    }
+  }
 }
+

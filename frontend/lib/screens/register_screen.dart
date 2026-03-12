@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../providers/auth_provider.dart';
+import '../api_config.dart';
 import 'login_screen.dart';
+import 'otp_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -12,13 +16,16 @@ class RegisterScreen extends StatefulWidget {
 
 class _RegisterScreenState extends State<RegisterScreen> {
   final _userController = TextEditingController();
+  final _emailController = TextEditingController(); 
   final _passController = TextEditingController();
+  final _secretCodeController = TextEditingController(); 
   String _selectedRole = "Student"; 
-  String? _selectedBranch; // Added for branch selection
+  String? _selectedBranch; 
+  bool _obscurePassword = true;
+  bool _isLoading = false;
 
   @override
   Widget build(BuildContext context) {
-    // Consistent theme colors from your figure
     const Color scaffoldBg = Color(0xFF0F0C29);
     const Color accentColor = Color(0xFF6C63FF);
 
@@ -68,14 +75,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 450),
                 child: ListView(
-                  shrinkWrap: true, // Key to keep it centered if possible
+                  shrinkWrap: true,
                   padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 40),
                   children: [
                     const Text("Create Account", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
                     const Text("Fill in the details to get started", style: TextStyle(color: Colors.white54)),
                     const SizedBox(height: 30),
   
-                    // Role Selection (Matches Login Screen)
+                    // Role Selection
                     const Text("I am a:", style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 10),
                     Row(
@@ -87,11 +94,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                     const SizedBox(height: 25),
   
-                    // Input Fields (Glassmorphic Style)
-                    _buildTextField("Username / Email", _userController, Icons.account_circle_outlined),
+                    // Input Fields
+                    if (_selectedRole == "Student") ...[
+                      _buildTextField("College Email (@rajagiri.edu.in)", _emailController, Icons.email_outlined),
+                    ] else ...[
+                      _buildTextField("College Email (@rajagiritech.edu.in)", _emailController, Icons.email_outlined),
+                    ],
                     const SizedBox(height: 20),
+                    
+                    _buildTextField("Full Name (Auto Caps)", _userController, Icons.account_circle_outlined, textCapitalization: TextCapitalization.characters),
+                    const SizedBox(height: 20),
+
                     _buildTextField("Create Password", _passController, Icons.lock_reset_outlined, isPassword: true),
                     const SizedBox(height: 20),
+                    
+                    if (_selectedRole == "Teacher") ...[
+                      _buildTextField("Secret Access Code", _secretCodeController, Icons.vpn_key_outlined, isPassword: true),
+                      const SizedBox(height: 20),
+                    ],
   
                     // Branch Selection (Only if Student)
                     if (_selectedRole == "Student") ...[
@@ -124,39 +144,112 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       const SizedBox(height: 20),
                     ],
   
-                    // Original Registration Logic
-                    ElevatedButton(
+                    // Registration Logic
+                    _isLoading
+                      ? const Center(child: CircularProgressIndicator(color: accentColor))
+                      : ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: accentColor,
                         minimumSize: const Size(double.infinity, 55),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       onPressed: () async {
-                        if (_userController.text.isEmpty || _passController.text.isEmpty) {
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill all fields")));
+                        if (_userController.text.isEmpty || _passController.text.isEmpty || _emailController.text.isEmpty) {
+                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill all required fields")));
                            return;
                         }
-
-                        if (_selectedRole == "Student" && _selectedBranch == null) {
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select a branch")));
-                           return;
+                        
+                        // Strict domain checking based on role
+                        if (_selectedRole == "Student") {
+                            final emailRegExp = RegExp(r'^u\d{7}@rajagiri\.edu\.in$', caseSensitive: false);
+                            if (!emailRegExp.hasMatch(_emailController.text.trim())) {
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Student emails must be in the format u*******@rajagiri.edu.in")));
+                                return;
+                            }
+                        } else if (_selectedRole == "Teacher" && !_emailController.text.toLowerCase().endsWith('@rajagiritech.edu.in')) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Teacher emails must end in @rajagiritech.edu.in")));
+                            return;
                         }
 
-                        final success = await Provider.of<AuthProvider>(context, listen: false)
-                            .register(_userController.text, _passController.text, _selectedBranch, _selectedRole.toLowerCase());
-  
-                        if (success && context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Registration Successful! Please Login.")),
-                          );
-                          Navigator.pop(context); // Go back to Login
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Registration Failed")),
-                          );
+                        // Basic Password Criteria: Minimum 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special character
+                        final password = _passController.text;
+                        final RegExp passwordRegExp = RegExp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$');
+                        
+                        if (!passwordRegExp.hasMatch(password)) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Password must be at least 8 characters long, include an uppercase letter, a lowercase letter, a number, and a special character (@\$!%*?&)")),
+                            );
+                            return;
                         }
+
+                        setState(() => _isLoading = true);
+
+                        if (_selectedRole == "Student") {
+                          if (_selectedBranch == null) {
+                             setState(() => _isLoading = false);
+                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select a branch")));
+                             return;
+                          }
+                          
+                          try {
+                            final response = await http.post(
+                              Uri.parse('${ApiConfig.baseUrl}/auth/send-otp'),
+                              headers: {'Content-Type': 'application/json'},
+                              body: jsonEncode({
+                                'email': _emailController.text.trim(),
+                                'username': _userController.text.trim().toUpperCase(),
+                                'password': _passController.text,
+                                'branch': _selectedBranch,
+                                'role': 'student',
+                              }),
+                            );
+                            
+                            final body = jsonDecode(response.body);
+                            
+                            if (response.statusCode == 200 && mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("OTP Sent! Check your email.")));
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => OtpScreen(email: _emailController.text.trim())));
+                            } else if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed: ${body['detail']}")));
+                            }
+                          } catch (e) {
+                             if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                          }
+
+                        } else if (_selectedRole == "Teacher") {
+                          if (_secretCodeController.text.isEmpty) {
+                             setState(() => _isLoading = false);
+                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please enter Secret Access Code")));
+                             return;
+                          }
+                          
+                          try {
+                            final response = await http.post(
+                              Uri.parse('${ApiConfig.baseUrl}/teacher/register'),
+                              headers: {'Content-Type': 'application/json'},
+                              body: jsonEncode({
+                                'username': _userController.text.trim().toUpperCase(),
+                                'email': _emailController.text.trim(),
+                                'password': _passController.text,
+                                'secret_code': _secretCodeController.text.trim(),
+                              }),
+                            );
+                            
+                            if (response.statusCode == 200 && mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Teacher Registration Successful! Please Login.")));
+                              Navigator.pop(context);
+                            } else if (mounted) {
+                              final body = jsonDecode(response.body);
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Registration Failed: ${body['detail']}")));
+                            }
+                          } catch (e) {
+                             if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                          }
+                        }
+                        
+                        if (mounted) setState(() => _isLoading = false);
                       },
-                      child: const Text("Create Account", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      child: const Text("Create Account / Send OTP", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
                     ),
   
                     const SizedBox(height: 20),
@@ -175,8 +268,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ),
     );
   }
-
-  // --- UI HELPER COMPONENTS ---
 
   Widget _roleButton(String title, IconData icon, bool isSelected) {
     return Expanded(
@@ -201,7 +292,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller, IconData icon, {bool isPassword = false}) {
+  Widget _buildTextField(String label, TextEditingController controller, IconData icon, {bool isPassword = false, TextCapitalization textCapitalization = TextCapitalization.none}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -209,10 +300,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
         const SizedBox(height: 8),
         TextField(
           controller: controller,
-          obscureText: isPassword,
+          obscureText: isPassword && _obscurePassword,
+          textCapitalization: textCapitalization,
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
             prefixIcon: Icon(icon, color: Colors.white38),
+            suffixIcon: isPassword 
+              ? IconButton(
+                  icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: Colors.white38),
+                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                )
+              : null,
             filled: true,
             fillColor: Colors.white.withOpacity(0.05),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
@@ -247,5 +345,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _userController.dispose();
+    _emailController.dispose();
+    _passController.dispose();
+    _secretCodeController.dispose();
+    super.dispose();
   }
 }

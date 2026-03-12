@@ -269,17 +269,17 @@ class _QuizScreenState extends State<QuizScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("You scored $score/${questions.length}.\n", style: const TextStyle(color: Colors.white70)),
+            Text("You scored $score/${questions.length}.\n", style: const TextStyle(color: Colors.white70, fontSize: 18)),
             if (score < questions.length * 0.7)
-              Text("Weak Area: $weakArea", style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
+              Text("Weak Area: $weakArea", style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 18)),
+            const SizedBox(height: 12),
             Text(
                 (leveledUp
                   ? 'You have reached a new difficulty level!'
                   : (widget.category == "TECHNICAL" && widget.targetBranch != null)
                     ? "Practice mode complete."
                     : 'Try to score 70%+ to level up.'),
-                style: const TextStyle(color: Colors.white70)),
+                style: const TextStyle(color: Colors.white70, fontSize: 16)),
           ],
         ),
         actions: [
@@ -717,11 +717,11 @@ class _QuizScreenState extends State<QuizScreen> {
                           children: [
                             Icon(Icons.lightbulb_outline, color: accentColor, size: 20),
                             const SizedBox(width: 8),
-                            Text("Explanation", style: TextStyle(fontWeight: FontWeight.bold, color: accentColor, fontSize: 16)),
+                            Text("Explanation", style: TextStyle(fontWeight: FontWeight.bold, color: accentColor, fontSize: 18)),
                           ],
                         ),
                         const SizedBox(height: 12),
-                        Text(q['explanation'] ?? "Standard logic applies.", style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5)),
+                        Text(q['explanation'] ?? "Standard logic applies.", style: const TextStyle(color: Colors.white70, fontSize: 16, height: 1.5)),
                         const SizedBox(height: 20),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
