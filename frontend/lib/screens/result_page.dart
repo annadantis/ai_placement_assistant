@@ -21,6 +21,8 @@ class ResultPage extends StatelessWidget {
     final String idealAnswer = result['ideal_answer'] ?? "";
     final String strategyNote = result['strategy_note'] ?? "";
     final String feedback = result['feedback'] ?? "";
+    final Map<String, dynamic>? sessionMetrics = result['session_metrics'];
+    final String cameraFeedback = result['camera_feedback'] ?? "";
 
     Color getScoreColor(double score) {
       if (score >= 7.5) return Colors.greenAccent;
@@ -133,6 +135,57 @@ class ResultPage extends StatelessWidget {
                 ),
               ],
             ),
+
+            const SizedBox(height: 32),
+
+            // New: Behavioral Stats Section
+            if (sessionMetrics != null) ...[
+              Text(
+                "Behavioral Insights",
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  _buildSmallMetricTile("Eye Contact", "${sessionMetrics['eye_contact'] ?? '0'}%", Icons.visibility, Colors.tealAccent),
+                  const SizedBox(width: 12),
+                  _buildSmallMetricTile("Speech Activity", "${sessionMetrics['speech_activity'] ?? '0'}%", Icons.mic, Colors.purpleAccent),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _buildSmallMetricTile("Smiles", "${sessionMetrics['smiles'] ?? '0'}%", Icons.emoji_emotions, Colors.orangeAccent),
+                  const SizedBox(width: 12),
+                  _buildSmallMetricTile("Head Pose", sessionMetrics['head_yaw_avg'] != null ? "${sessionMetrics['head_yaw_avg']}°" : "N/A", Icons.face, Colors.blueAccent),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, color: Colors.cyanAccent, size: 18),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        cameraFeedback,
+                        style: GoogleFonts.inter(fontSize: 12, color: Colors.white70, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
 
             const SizedBox(height: 32),
 
@@ -366,6 +419,32 @@ class ResultPage extends StatelessWidget {
             ),
           );
         }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildSmallMetricTile(String label, String value, IconData icon, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.12)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(value, style: GoogleFonts.poppins(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                Text(label, style: GoogleFonts.inter(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w700)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

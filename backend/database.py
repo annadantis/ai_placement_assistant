@@ -11,6 +11,7 @@ pymysql.install_as_MySQLdb()
 Base = declarative_base()
 
 # --- MYSQL CONFIGURATION ---
+# --- MYSQL CONFIGURATION ---
 DB_USER = os.getenv("MYSQL_USER", "root")
 DB_PASSWORD = os.getenv("MYSQL_PASSWORD", "Anna4@aa")
 DB_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")

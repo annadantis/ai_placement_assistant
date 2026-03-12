@@ -9,11 +9,12 @@ class ApiConfig {
 
   // ---------------- INTERVIEW ENDPOINTS ----------------
 
-  static Future<Map<String, dynamic>> evaluateInterview(String filePath) async {
+  static Future<Map<String, dynamic>> evaluateInterview(String filePath, {String username = "Anonymous"}) async {
     var request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/evaluate_interview'),
     );
+    request.fields['username'] = username;
     request.files.add(await http.MultipartFile.fromPath('audio', filePath));
 
     var streamedResponse = await request.send();
@@ -26,7 +27,6 @@ class ApiConfig {
   /// Fetches a random GD topic from the MySQL database
   static Future<Map<String, dynamic>> fetchGDTopic() async {
     try {
-      // Ensure the path matches the one that worked in your browser!
       final response = await http.get(Uri.parse('$baseUrl/gd_module/gd/topic'));
 
       if (response.statusCode == 200) {
@@ -45,42 +45,50 @@ class ApiConfig {
     required int topicId,
     required File audioFile,
     required File videoFile,
+    String username = "Anonymous",
   }) async {
     try {
-      // 1. Ensure the URL matches your FastAPI Router prefix
       final url = Uri.parse('$baseUrl/gd_module/submit');
-
       var request = http.MultipartRequest('POST', url);
 
-      // 2. Add fields
       request.fields['topic_id'] = topicId.toString();
+      request.fields['username'] = username;
 
-      // 3. Add the Audio (Key must be 'audio')
-      request.files.add(await http.MultipartFile.fromPath(
-        'audio',
-        audioFile.path,
-      ));
+      request.files.add(await http.MultipartFile.fromPath('audio', audioFile.path));
+      request.files.add(await http.MultipartFile.fromPath('video', videoFile.path));
 
-      // 4. Add the Video (Key must be 'video')
-      request.files.add(await http.MultipartFile.fromPath(
-        'video',
-        videoFile.path,
-      ));
-
-      // Send the request
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
       } else {
-        // This will help you see why it failed (e.g., 404 or 500)
         print("Server Error: ${response.body}");
         throw Exception("GD Evaluation failed: ${response.body}");
       }
     } catch (e) {
       print("Submit Error: $e");
       throw Exception("Network error during submission");
+    }
+  }
+
+  /// Simulates a multi-bot GD for a given topic
+  static Future<Map<String, dynamic>> simulateGD(int topicId) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/gd_module/simulate'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({"topic_id": topicId}),
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        throw Exception("Simulation failed: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Simulation Error: $e");
+      throw Exception("Failed to start GD simulation");
     }
   }
 
@@ -137,44 +145,32 @@ class ApiConfig {
     }
   }
 
-  // ---------------- PERFORMANCE & ANALYTICS ----------------
+  // ---------------- HISTORY & REPORTS ----------------
 
   static Future<List<dynamic>> fetchUserHistory(String username) async {
-    try {
-      final response = await http.get(Uri.parse('$baseUrl/history/$username'));
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
-      return [];
-    } catch (e) {
-      print("History Fetch Error: $e");
-      return [];
-    }
-  }
-
-  static Future<Map<String, dynamic>> fetchPerformanceByDate(String username, String date) async {
-    try {
-      final response = await http.get(Uri.parse('$baseUrl/performance_by_date/$username/$date'));
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
-      throw Exception("Failed to fetch performance for $date");
-    } catch (e) {
-      print("Date Performance error: $e");
-      rethrow;
+    final response = await http.get(Uri.parse('$baseUrl/history/$username'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception("Failed to load history");
     }
   }
 
   static Future<Map<String, dynamic>> fetchSessionDetail(String category, int sessionId) async {
-    try {
-      final response = await http.get(Uri.parse('$baseUrl/session_detail/${category.toUpperCase()}/$sessionId'));
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
+    final response = await http.get(Uri.parse('$baseUrl/session_detail/$category/$sessionId'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
       throw Exception("Failed to load session details");
-    } catch (e) {
-      print("Session Detail error: $e");
-      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> fetchPerformanceByDate(String username, String dateStr) async {
+    final response = await http.get(Uri.parse('$baseUrl/performance_by_date/$username/$dateStr'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception("Failed to load performance by date");
     }
   }
 }

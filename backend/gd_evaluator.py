@@ -101,20 +101,44 @@ def evaluate_gd(topic: str, transcript: str, audio_path: str, camera_score: floa
     try:
         y, sr = librosa.load(audio_path, sr=None)
         duration = librosa.get_duration(y=y, sr=sr)
-        word_count = len(transcript.split())
         wpm = (word_count / duration) * 60 if duration > 0 else 0
-        wpm_score = max(0, 10 - (abs(145 - wpm) / 10))
         
         intervals = librosa.effects.split(y, top_db=30)
         speech_time = sum((end - start) / sr for start, end in intervals)
-        silence_pct = ((duration - speech_time) / duration) * 100
-        silence_score = 10 if 10 <= silence_pct <= 20 else max(0, 10 - abs(15 - silence_pct) / 2)
+        silence_pct = ((duration - speech_time) / duration) * 100 if duration > 0 else 0
         
-        fillers = [r'\bum\b', r'\buh\b', r'\blike\b', r'\bactually\b', r'\bbasically\b']
+        # WPM scoring: 120-160 is ideal (score 10). Deduct 1 point per 10 WPM deviation outside this range.
+        if 120 <= wpm <= 160:
+            wpm_score = 10.0
+        elif wpm < 120:
+            wpm_score = max(0.0, 10.0 - ((120 - wpm) / 10))
+        else:
+            wpm_score = max(0.0, 10.0 - ((wpm - 160) / 10))
+            
+        # Silence scoring: 10-25% is ideal. Deduct 1 point per 5% deviation outside this range.
+        if 10.0 <= silence_pct <= 25.0:
+            silence_score = 10.0
+        elif silence_pct < 10.0:
+            silence_score = max(0.0, 10.0 - ((10.0 - silence_pct) / 5))
+        else:
+            silence_score = max(0.0, 10.0 - ((silence_pct - 25.0) / 5))
+        
+        fillers = [
+            r'\bum\b', r'\buh\b', r'\berr\b', r'\bhmm\b', r'\blike\b', 
+            r'\bactually\b', r'\bbasically\b', r'\byou know\b', r'\bi mean\b', r'\bso\b',
+            r'\bright\b', r'\bwell\b', r'\bokay\b', r'\bouknow\b', r'\bkind of\b', r'\bsort of\b',
+            r'\byou see\b', r'\banyway\b', r'\banyhow\b'
+        ]
         filler_count = sum(len(re.findall(f, transcript.lower())) for f in fillers)
-        filler_score = max(0, 10 - (filler_count * 2))
+        
+        # Filler scoring: 0-1 fillers = 10. Deduct 0.5 point per filler after 1, maximum deduction 5 points.
+        if filler_count <= 1:
+            filler_score = 10.0
+        else:
+            penalty = min((filler_count - 1) * 0.5, 5.0)
+            filler_score = 10.0 - penalty
 
-        final_voice_score = round(float((wpm_score * 0.4) + (silence_score * 0.3) + (filler_score * 0.3)), 1)
+        final_voice_score = round(float((wpm_score * 0.45) + (silence_score * 0.35) + (filler_score * 0.20)), 1)
     except:
         final_voice_score = 0
         wpm, silence_pct, filler_count = 0, 0, 0

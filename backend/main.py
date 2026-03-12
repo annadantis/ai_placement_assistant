@@ -11,8 +11,11 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone, time as dt_time
 import pymysql
+import time
+import asyncio
+import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import List, Dict, Optional, Any
@@ -125,7 +128,7 @@ def process_weekly_level_up(username: str, db: Session):
     - Trigger: Anytime the requirement is met since the last Level Update.
     """
     try:
-        today = date.today()
+        today = get_ist_date()
         
         # Get user
         user_result = db.execute(
@@ -274,7 +277,7 @@ def get_user_level(db: Session, username: str, category: str):
 
 def get_todays_questions(db: Session, username: str, category: str, target_branch: str = None):
     """Get 10 questions for today - avoiding repeats from previous days"""
-    today = date.today()
+    today = get_ist_date()
     
     # If target_branch is provided and DOES NOT MATCH user's branch, do NOT cache/use daily_quiz
     # This is "Practice Mode"
@@ -431,9 +434,9 @@ def get_todays_questions(db: Session, username: str, category: str, target_branc
     # --- IMPROVED: WEEKLY TOPIC BALANCING LOGIC ---
     
     # 1. Identify Week Start (Monday)
-    today_dt = date.today()
+    today_dt = get_ist_date()
     week_start = today_dt - timedelta(days=today_dt.weekday())
-    week_start_ts = datetime.combine(week_start, time.min)
+    week_start_ts = datetime.combine(week_start, dt_time.min)
     
     # 2. Get all distinct areas for this branch/category
     branch_val = branch_to_use.upper() if (category.lower() == "technical" and branch_to_use) else "COMMON"
@@ -744,6 +747,16 @@ app.include_router(teacher_router)
 app.include_router(gd_router, prefix="/gd_module", tags=["GD Module"])
 app.include_router(news_router)
 
+# --- AUTOMATION TRIGGER (For Manual Testing) ---
+@app.post("/trigger_daily_generation", tags=["Automation"])
+async def trigger_daily_generation():
+    from automation_service import daily_question_job
+    try:
+        daily_question_job()
+        return {"status": "success", "message": "Manual Question Generation Triggered."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- ROUTES ---
 
 @app.post("/register", tags=["Authentication"])
@@ -837,7 +850,7 @@ async def get_daily_quiz(request: QuizRequest, background_tasks: BackgroundTasks
         
         return {
             "status": "success",
-            "date": str(date.today()),
+            "date": str(get_ist_date()),
             "difficulty": get_user_level(db, request.username, request.category),
             "questions": questions,
             "total": len(questions)
@@ -905,7 +918,7 @@ async def submit_quiz(submission: QuizCompleteSubmission, db: Session = Depends(
                 score=submission.score,
                 total_questions=submission.total_questions,
                 area=area_to_save,
-                timestamp=datetime.now()
+                timestamp=datetime.now(timezone.utc)
             )
             db.add(new_result)
             db.commit()
@@ -982,7 +995,7 @@ async def get_quiz_status(username: str, category: str, db: Session = Depends(ge
         return {
             "has_quiz_today": has_quiz_today,
             "current_level": difficulty,
-            "date": str(today)
+            "date": str(get_ist_date())
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -995,22 +1008,26 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
         def get_daily_agg():
             res = db.execute(
                 text("""
-                    SELECT DATE(DATE_ADD(r.timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day, AVG(r.score) as avg_score
+                    SELECT DATE(DATE_ADD(r.timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day, AVG(r.score) as avg_score, r.category
                     FROM results r
                     INNER JOIN (
-                        SELECT MIN(timestamp) as first_time
+                        SELECT MIN(timestamp) as first_time, category
                         FROM results
-                        WHERE username = :username AND category IN ('APTITUDE', 'TECHNICAL')
+                        WHERE username = :username AND category IN ('APTITUDE', 'TECHNICAL', 'GD', 'INTERVIEW')
                         AND DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE) >= DATE_SUB(DATE(DATE_ADD(NOW(), INTERVAL '5:30' HOUR_MINUTE)), INTERVAL 7 DAY)
                         GROUP BY DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)), category
-                    ) sub ON r.timestamp = sub.first_time
-                    WHERE r.username = :username AND r.category IN ('APTITUDE', 'TECHNICAL')
-                    GROUP BY day
+                    ) sub ON r.timestamp = sub.first_time AND r.category = sub.category
+                    WHERE r.username = :username AND r.category IN ('APTITUDE', 'TECHNICAL', 'GD', 'INTERVIEW')
+                    GROUP BY day, r.category
                     ORDER BY day ASC
                 """),
                 {"username": username.strip()}
             )
-            return [{"score": round(float(r[1]), 1), "time": str(r[0])} for r in res.fetchall()]
+            raw = res.fetchall()
+            # Group by category for easier frontend use if needed, but the caller expects a single list of scores/times
+            # Actually get_weekly_report caller seems to expect a single list for 'overall_daily'
+            # Let's keep it as a combined list as it was, but including all categories
+            return [{"score": round(float(r[1]), 1), "time": str(r[0]), "category": r[2]} for r in raw]
 
         # 2. Weekly Aggregation for GD and Interview (Last 4 Weeks)
         def get_weekly_agg(cat_name):
@@ -1059,7 +1076,7 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
         ).fetchall()
         dates = [r[0] for r in streak_query]
         streak = 0
-        curr = date.today()
+        curr = get_ist_date()
         if dates and curr not in dates and (curr - timedelta(days=1)) in dates:
             curr -= timedelta(days=1)
         while curr in dates:
@@ -1228,7 +1245,7 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
         # We use a date range to handle potential timezone shifts (UTC/IST)
         results_query = db.execute(
             text("""
-                SELECT category, score, total_questions, area, timestamp, confidence 
+                SELECT id, category, score, total_questions, area, timestamp, confidence 
                 FROM results 
                 WHERE username = :u 
                 AND (
@@ -1240,14 +1257,15 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
         ).fetchall()
 
         for row in results_query:
-            cat = row[0].upper()
+            cat = row[1].upper()
             if cat in report:
                 report[cat].append({
-                    "score": float(row[1]) if row[1] else 0.0,
-                    "total_questions": int(row[2]) if row[2] else 0,
-                    "area": row[3] or "",
-                    "timestamp": str(row[4]),
-                    "confidence": row[5] or ""
+                    "id": row[0],
+                    "score": float(row[2]) if row[2] else 0.0,
+                    "total_questions": int(row[3]) if row[3] else 0,
+                    "area": row[4] or "",
+                    "timestamp": str(row[5]),
+                    "confidence": row[6] or ""
                 })
 
         # 2. Fetch GD results. We need to match username. 
@@ -1260,7 +1278,7 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
         try:
             gd_query = db.execute(
                 text("""
-                    SELECT final_score, communication_score, content_score, topic_id
+                    SELECT id, final_score, communication_score, content_score, topic_id
                     FROM gd_results 
                     WHERE username = :u 
                     AND (
@@ -1273,10 +1291,11 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
 
             for row in gd_query:
                 report["GD"].append({
-                    "final_score": float(row[0]) if row[0] else 0.0,
-                    "communication_score": float(row[1]) if row[1] else 0.0,
-                    "content_score": float(row[2]) if row[2] else 0.0,
-                    "topic_id": int(row[3]) if row[3] else 0,
+                    "id": row[0],
+                    "final_score": float(row[1]) if row[1] else 0.0,
+                    "communication_score": float(row[2]) if row[2] else 0.0,
+                    "content_score": float(row[3]) if row[3] else 0.0,
+                    "topic_id": int(row[4]) if row[4] else 0,
                 })
         except Exception as e:
             print(f"DEBUG: Could not fetch GD results, perhaps missing column. Error: {e}")
@@ -1309,7 +1328,7 @@ async def get_branch_leaderboard(branch: str, db: Session = Depends(get_db)):
             curr = today
             while True:
                 count = db.execute(
-                    text("SELECT COUNT(*) FROM results WHERE username = :u AND DATE(timestamp) = :d"),
+                    text("SELECT COUNT(*) FROM results WHERE username = :u AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) = :d"),
                     {"u": uname, "d": curr}
                 ).fetchone()[0]
                 if count > 0:
@@ -1389,7 +1408,7 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
             text("""
                 SELECT category, SUM(score) as total_s, COUNT(*) as count 
                 FROM results 
-                WHERE username = :username AND DATE(timestamp) = :today
+                WHERE username = :username AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) = :today
                 GROUP BY category
             """),
             {"username": username.strip(), "today": today}
@@ -1421,15 +1440,15 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
 
         # 2. Count distinct days for each category this week
         tech_days = db.execute(text("""
-            SELECT COUNT(DISTINCT DATE(timestamp)) FROM results 
+            SELECT COUNT(DISTINCT DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE))) FROM results 
             WHERE username = :username AND category = 'TECHNICAL'
-            AND timestamp >= DATE_SUB(DATE(NOW()), INTERVAL WEEKDAY(DATE(NOW())) DAY)
+            AND DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE) >= DATE_SUB(DATE(DATE_ADD(NOW(), INTERVAL '5:30' HOUR_MINUTE)), INTERVAL WEEKDAY(DATE(DATE_ADD(NOW(), INTERVAL '5:30' HOUR_MINUTE))) DAY)
         """), {"username": username.strip()}).fetchone()[0] or 0
         
         apt_days = db.execute(text("""
-            SELECT COUNT(DISTINCT DATE(timestamp)) FROM results 
+            SELECT COUNT(DISTINCT DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE))) FROM results 
             WHERE username = :username AND category = 'APTITUDE'
-            AND timestamp >= DATE_SUB(DATE(NOW()), INTERVAL WEEKDAY(DATE(NOW())) DAY)
+            AND DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE) >= DATE_SUB(DATE(DATE_ADD(NOW(), INTERVAL '5:30' HOUR_MINUTE)), INTERVAL WEEKDAY(DATE(DATE_ADD(NOW(), INTERVAL '5:30' HOUR_MINUTE))) DAY)
         """), {"username": username.strip()}).fetchone()[0] or 0
 
         # 3. Calculate Weekly Progress (%)
@@ -1487,14 +1506,22 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
         weak_areas_tech_data = get_top_weak_areas("TECHNICAL")
         weak_areas_apt_data = get_top_weak_areas("APTITUDE")
 
-        # 5. Accuracy & Total Attempts
+        # 5. Accuracy & Total Attempts (Include both results and gd_results)
         all_time_res = db.execute(
-            text("SELECT COUNT(*), AVG(score) FROM results WHERE username = :username"),
+            text("""
+                SELECT SUM(cnt), SUM(total_score)
+                FROM (
+                    SELECT COUNT(*) as cnt, SUM(score) as total_score FROM results WHERE username = :username
+                    UNION ALL
+                    SELECT COUNT(*) as cnt, SUM(overall_score) as total_score FROM gd_results WHERE username = :username
+                ) combined
+            """),
             {"username": username.strip()}
         ).fetchone()
         
-        total_attempts = all_time_res[0] or 0
-        avg_score = float(all_time_res[1] or 0)
+        total_attempts = int(all_time_res[0] or 0)
+        sum_scores = float(all_time_res[1] or 0)
+        avg_score = sum_scores / total_attempts if total_attempts > 0 else 0
         accuracy = (avg_score / 10.0) * 100
 
         # 6. Recent Daily Performance (Strictly Current Week: Monday to Sunday)
@@ -1512,10 +1539,10 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
         for cat in ["APTITUDE", "TECHNICAL", "INTERVIEW", "GD"]:
             res = db.execute(
                 text("""
-                    SELECT DATE(timestamp) as day, AVG(score) as avg_score, DAYNAME(timestamp) as day_name
+                    SELECT DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day, MAX(score) as avg_score, DAYNAME(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day_name
                     FROM results
                     WHERE username = :username AND category = :cat
-                    AND timestamp >= :monday
+                    AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) >= :monday
                     GROUP BY day, day_name
                     ORDER BY day ASC
                 """),
@@ -1540,11 +1567,11 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
         for cat in ["APTITUDE", "TECHNICAL", "INTERVIEW", "GD"]:
             res_lw = db.execute(
                 text("""
-                    SELECT DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day, AVG(score) as avg_score, DAYNAME(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day_name
+                    SELECT DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day, MAX(score) as avg_score, DAYNAME(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) as day_name
                     FROM results
                     WHERE username = :username AND category = :cat
-                    AND DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE) >= :last_monday 
-                    AND DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE) <= :last_sunday
+                    AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) >= :last_monday 
+                    AND DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) <= :last_sunday
                     GROUP BY day, day_name
                     ORDER BY day ASC
                 """),
@@ -1598,20 +1625,35 @@ async def evaluate(audio: UploadFile = File(...), username: str = Form("Anonymou
         transcription = transcription_result.get("text", "").strip()
 
         prompt = f"""
-System: You are a strict Technical Interviewer.
-Candidate's Answer: "{transcription}"
-Question: "Explain final vs const in Dart."
+You are an expert Technical Interviewer. 
 
-Evaluate strictly. Return ONLY JSON:
+Question: "Explain final vs const in Dart."
+Candidate's Answer: "{transcription}"
+
+Instruction:
+1. Evaluate the candidate's technical accuracy.
+2. Provide feedback in ENGLISH only.
+3. Return exactly ONE JSON object.
+
+Return Format:
 {{
   "score": "X/10",
-  "feedback": "Direct, honest feedback.",
-  "ideal_answer": "Professional explanation."
+  "feedback": "Concise English feedback here",
+  "ideal_answer": "Model English explanation here"
 }}
+
+Rules:
+- Return ONLY the JSON object.
+- Language must be English.
 """
         
-        response = ollama.generate(model='llama3', prompt=prompt, format='json') 
-        data = json.loads(response['response'])
+        response = ollama.generate(model='llama3.2', prompt=prompt, format='json') 
+        try:
+            data = json.loads(response['response'])
+        except Exception:
+            # Fallback to the robust extractor
+            from ollama_eval import extract_json as safe_extract
+            data = safe_extract(response['response'])
         
         # Extract numeric score (e.g., "7/10" -> 7)
         score_val = 5 # default
@@ -1626,11 +1668,11 @@ Evaluate strictly. Return ONLY JSON:
         new_score = Score(
             username=username,
             score=score_val,
-            total_questions=1,
+            total_questions=10,
             category="INTERVIEW",
             area="Interview Practice", # Default area for interview
             confidence=json.dumps({"feedback": data.get("feedback", "")}), # Storing feedback in confidence for now
-            timestamp=datetime.now(timezone.utc)
+            timestamp=get_ist_now()
         )
         db.add(new_score)
         db.commit()
@@ -1673,22 +1715,18 @@ session_metrics = {} # { username: { 'frames': 0, 'face': 0, 'gaze': 0, 'smile':
 
 # --- MEDIAPIPE INITIALIZATION ---
 try:
-    # Attempt multiple ways to load face_mesh as MediaPipe versions differ
-    try:
-        from mediapipe.solutions import face_mesh as mp_face_mesh
-    except (ImportError, AttributeError):
-        try:
-            from mediapipe.python.solutions import face_mesh as mp_face_mesh
-        except (ImportError, AttributeError):
-            import mediapipe as mp
-            mp_face_mesh = mp.solutions.face_mesh
-    
+    import mediapipe.solutions.face_mesh as mp_face_mesh
     MEDIAPIPE_AVAILABLE = True
     print("✅ MediaPipe initialized successfully")
 except Exception as e:
-    MEDIAPIPE_AVAILABLE = False
-    mp_face_mesh = None
-    print(f"⚠️  MediaPipe Load Error: {e}")
+    try:
+        import mediapipe.python.solutions.face_mesh as mp_face_mesh
+        MEDIAPIPE_AVAILABLE = True
+        print("✅ MediaPipe loaded via python.solutions")
+    except Exception:
+        MEDIAPIPE_AVAILABLE = False
+        mp_face_mesh = None
+        print(f"⚠️  MediaPipe Solutions load error (Legacy session analyzer disabled): {e}")
 
 # Indices for Behavioral Tracking
 L_EYE = [362, 385, 387, 263, 373, 380]
@@ -1857,7 +1895,7 @@ async def get_questions(username: str, category: str, background_tasks: Backgrou
             if asked_q_ids:
                  fallback_query = fallback_query.filter(InterviewQuestion.id.notin_(asked_q_ids))
                  
-            fallback = fallback_query.order_by(func.rand()).limit(3).all()
+            fallback = fallback_query.order_by(func.rand()).limit(5).all()
             for q in fallback:
                  formatted_qs.append({
                     "question": q.question,
@@ -1867,9 +1905,19 @@ async def get_questions(username: str, category: str, background_tasks: Backgrou
                  })
                  db.add(UserAskedQuestion(username=username_clean, question_id=q.id))
             db.commit()
-            if not formatted_qs:
-                 # Absolute fallback if nothing works
-                 formatted_qs = [{"question": f"Please introduce yourself and explain your interest in {branch}.", "ideal_answer": "Provide a solid introduction.", "difficulty": 1, "area": "HR"}]
+            
+            if len(formatted_qs) < 5:
+                 # Absolute fallback if nothing works or DB is very empty
+                 placeholders = [
+                     {"question": f"Please introduce yourself and explain your interest in {branch}.", "ideal_answer": "Provide a solid introduction.", "difficulty": 1, "area": "HR"},
+                     {"question": "Where do you see yourself in the next 5 years?", "ideal_answer": "Discuss career growth and stability.", "difficulty": 1, "area": "HR"},
+                     {"question": "What are your greatest technical strengths?", "ideal_answer": "Be specific about technologies you know well.", "difficulty": 1, "area": "Technical"},
+                     {"question": "Can you describe a challenging project you worked on?", "ideal_answer": "Use the STAR method: Situation, Task, Action, Result.", "difficulty": 1, "area": "Experience"},
+                     {"question": "What interests you most about this branch/industry?", "ideal_answer": "Show passion and research about the field.", "difficulty": 1, "area": "Motivation"}
+                 ]
+                 # Fill up to 5 questions
+                 while len(formatted_qs) < 5:
+                     formatted_qs.append(placeholders[len(formatted_qs)])
 
         db.close()
         return {"questions": formatted_qs, "level": level}
@@ -1885,7 +1933,7 @@ async def get_questions(username: str, category: str, background_tasks: Backgrou
         qs = load_questions_by_difficulty(file, 1) + load_questions_by_difficulty(file, 2)
     random.shuffle(qs)
     db.close()
-    return {"questions": qs[:5], "level": level} # Optimized to 5 high-quality questions
+    return {"questions": [{"id": q.id, "question": q.question} for q in qs[:5]], "level": level}
 
 # --- UPDATED: INTERVIEW EVALUATION ---
 
@@ -1973,192 +2021,452 @@ async def process_frame(username: str = Form(...), frame: UploadFile = File(...)
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+async def background_evaluate_question(username: str, index: int, question: str, answer: str, ideal_answer: str, branch: str = "COMMON"):
+    """Evaluate a single interview question in the background using Ollama AsyncClient."""
+    if not answer or len(answer.strip()) < 5:
+        res = {
+            "accuracy": "0%",
+            "score": 0.0,
+            "improvement": "Providing no answer or a very brief one doesn't demonstrate your knowledge. Try to explain at least the basic concepts.",
+            "status": "evaluated"
+        }
+        if username in session_answers and index < len(session_answers[username]):
+            session_answers[username][index].update(res)
+        return
+
+    prompt = f"""
+    You are an expert technical interviewer evaluating a {branch} engineering candidate. 
+    Question: {question}
+    Ideal Answer: {ideal_answer}
+    Candidate Answer: {answer}
+
+    Evaluation Criteria:
+    - Technical Accuracy: Does the candidate understand the core concepts?
+    - Completeness: Did they cover all parts of the question?
+    - Clarity: Is the explanation logical and easy to follow?
+
+    IMPORTANT:
+    1. 'accuracy' should be a percentage string (e.g., "85%").
+    2. 'score' should be a float from 0.0 to 10.0.
+    3. 'improvement' MUST be a specific, actionable sentence for a student to improve this exact answer.
+
+    Return ONLY JSON:
+    {{
+      "accuracy": "...",
+      "score": ...,
+      "improvement": "..."
+    }}
+    """
+    try:
+        # Use async client for non-blocking parallel execution
+        client = ollama.AsyncClient()
+        response = await client.generate(model='llama3', prompt=prompt, format='json')
+        eval_data = json.loads(response['response'])
+        eval_data["status"] = "evaluated"
+        eval_data["ideal_answer"] = ideal_answer
+        if username in session_answers and index < len(session_answers[username]):
+            session_answers[username][index].update(eval_data)
+    except Exception as e:
+        print(f"Background Eval Error for {username} Q{index}: {e}")
+        if username in session_answers and index < len(session_answers[username]):
+            session_answers[username][index]["status"] = "error"
+
+def analyze_voice_features(transcript: str, duration: float):
+    """Calculates filler words, WPM, and generates a voice score."""
+    # Handle "No response" cases to prevent 240 WPM bugs
+    if not transcript or "no audible response" in transcript.lower():
+        return {
+            "voice_score": 0.0,
+            "filler_count": 0,
+            "wpm": 0,
+            "feedback": "No audible response detected."
+        }
+        
+    # Expanded filler word list for better detection
+    fillers = [
+        r'\bum\b', r'\buh\b', r'\berr\b', r'\bhmm\b', r'\blike\b', 
+        r'\bactually\b', r'\bbasically\b', r'\byou know\b', r'\bi mean\b', r'\bso\b',
+        r'\bright\b', r'\bwell\b', r'\bokay\b', r'\bouknow\b', r'\bkind of\b', r'\bsort of\b',
+        r'\byou see\b', r'\banyway\b', r'\banyhow\b'
+    ]
+    # Use (?i) for case-insensitive matching
+    filler_count = sum(len(re.findall(f, transcript.lower())) for f in fillers)
+    
+    words = transcript.strip().split()
+    wpm = (len(words) / max(1.0, duration)) * 60
+    
+    # Mathematical Scoring
+    filler_score = max(0.0, 10.0 - (filler_count * 2.0))
+    # Target: 130-160 WPM for clear speech
+    wpm_score = 10.0 if 130 <= wpm <= 160 else max(0.0, 10.0 - abs(145.0 - wpm) / 10.0)
+    
+    voice_score = round((filler_score * 0.6 + wpm_score * 0.4), 1)
+    
+    return {
+        "voice_score": voice_score,
+        "filler_count": filler_count,
+        "wpm": round(wpm, 1),
+        "feedback": f"Speech rate: {round(wpm)} WPM. {filler_count} filler words detected."
+    }
+
+async def background_process_answer(username: str, index: int, question: str, audio_path: str, ideal_answer: str, branch: str = "COMMON"):
+    """Background task to handle transcription and then evaluation."""
+    try:
+        # 1. Transcribe (Runs in background)
+        result = stt_model.transcribe(audio_path, language="en", task="transcribe")
+        transcription = result.get("text", "").strip()
+        
+        # Get duration from whisper result segments
+        duration = 0.0
+        if "segments" in result and result["segments"]:
+            duration = result["segments"][-1]["end"]
+        
+        if not transcription: transcription = "No audible response recorded."
+        
+        # 2. Analyze Voice Features
+        voice_metrics = analyze_voice_features(transcription, duration)
+        
+        # 3. Update session answers with transcription and voice data
+        if username in session_answers and index < len(session_answers[username]):
+            session_answers[username][index].update({
+                "answer": transcription,
+                "status": "evaluating_technical",
+                "voice_metrics": voice_metrics
+            })
+        
+        # 4. Trigger Evaluation (Now async/parallel)
+        await background_evaluate_question(username, index, question, transcription, ideal_answer, branch)
+        
+        # 5. Cleanup
+        if os.path.exists(audio_path): os.remove(audio_path)
+    except Exception as e:
+        print(f"Background Process Error for {username} Q{index}: {traceback.format_exc()}")
+        if username in session_answers and index < len(session_answers[username]):
+            session_answers[username][index]["status"] = "error"
+        if os.path.exists(audio_path): os.remove(audio_path)
+
 @app.post("/evaluate_step")
-async def evaluate_step(username: str = Form(...), question: str = Form(...), index: int = Form(...), audio: UploadFile = File(...)):
+async def evaluate_step(
+    background_tasks: BackgroundTasks,
+    username: str = Form(...), 
+    question: str = Form(...), 
+    index: int = Form(...), 
+    audio: UploadFile = File(...)
+):
     username = username.strip()
     a_path = f"temp_{username}_{index}.m4a"
-    with open(a_path, "wb") as f: 
-        f.write(await audio.read())
     
-    # IMPROVED: Voice Recognition context to prevent "Roman Y" errors
-    result = stt_model.transcribe(a_path, language="en", task="transcribe", initial_prompt="This is a technical interview in English.")
-    transcription = result["text"]
+    # Fast Disk Sync
+    content = await audio.read()
+    with open(a_path, "wb") as f: 
+        f.write(content)
     
     if username not in session_answers:
         session_answers[username] = []
     
-    session_answers[username].append({"question": question, "answer": transcription})
-    os.remove(a_path)
-    return {"status": "recorded", "index": index, "preview": transcription[:50]}
+    # Store placeholder data - Evaluation status is now "transcribing" initially
+    q_data = {
+        "question": question, 
+        "answer": "Processing...", 
+        "status": "transcribing",
+        "accuracy": "0%",
+        "score": 0.0,
+        "improvement": "Processing audio..."
+    }
+    
+    while len(session_answers[username]) <= index:
+        session_answers[username].append(None)
+    
+    session_answers[username][index] = q_data
+
+    # Fetch branch and ideal answer from DB for background eval
+    db = SessionLocal()
+    try:
+        from models import InterviewQuestion, User
+        user = db.query(User).filter(User.username == username).first()
+        branch = user.branch if user else "COMMON"
+        
+        iq = db.query(InterviewQuestion).filter(InterviewQuestion.question == question).first()
+        ideal = iq.ideal_answer if iq else "Explain the technical concepts behind this question clearly."
+        
+        # Trigger ALL processing in background - Transcription AND Evaluation
+        background_tasks.add_task(background_process_answer, username, index, question, a_path, ideal, branch)
+    finally:
+        db.close()
+
+def analyze_video_session(video_path: str):
+    """Wrapper for the advanced MediaPipe-based CameraEvaluator."""
+    try:
+        from camera_eval import CameraEvaluator
+        evaluator = CameraEvaluator()
+        return evaluator.analyze_video(video_path)
+    except Exception as e:
+        print(f"Error in analyze_video_session: {e}")
+        # Return fallback with safe metrics
+        return {
+            "camera_score": 0.0, 
+            "camera_feedback": "Video analysis could not be completed. Please ensure your camera is working and your face is visible.",
+            "metrics": {"total_frames": 0, "eye_contact": 0.0, "smile_pct": 0.0, "visibility": 0.0}
+        }
 
 @app.post("/final_session_report")
 async def final_session_report(username: str = Form(...), video: Optional[UploadFile] = File(None)):
     username = username.strip()
     v_path = f"v_{username}.mp4"
-    if video:
-        with open(v_path, "wb") as f: f.write(await video.read())
-        behavior_metrics = analyze_video_session(v_path)
-    else:
-        behavior_metrics = {"eye_contact": "N/A", "blinks_per_min": 0, "demeanor": "N/A (No Video Provided)"}
-
     
-    qa_history = session_answers.get(username, [])
+    # Wait for all background tasks (transcription + evaluation) to finish
+    qa_history = [q for q in session_answers.get(username, []) if q is not None]
+    wait_start = time.time()
+    while any(q.get("status") in ["transcribing", "evaluating_technical", "evaluating"] for q in qa_history) and (time.time() - wait_start < 15):
+        await asyncio.sleep(0.5)
+
+    # 1. Physical Presence & Behavioral Evaluation
+    print(f"DEBUG: Processing final report for {username}. Video present: {video is not None}")
+    if video:
+        v_bytes = await video.read()
+        print(f"DEBUG: Video received, size: {len(v_bytes)} bytes")
+        with open(v_path, "wb") as f: 
+            f.write(v_bytes)
+        
+        print(f"DEBUG: Video saved to {os.path.abspath(v_path)}. Analyzing...")
+        camera_eval = analyze_video_session(v_path)
+        print(f"DEBUG: Camera analysis complete. Score: {camera_eval.get('camera_score')}")
+        camera_score = float(camera_eval.get("camera_score", 0.0))
+        behavior_full = camera_eval # Full dictionary for DB storage
+    else:
+        print("DEBUG: No video provided for analysis.")
+        camera_score = 0.0
+        camera_eval = {"camera_score": 0.0, "camera_feedback": "No video provided.", "metrics": {}}
+        behavior_full = camera_eval
+
+    # 2. Extract Mathematical Scores for Fusion
+    tech_scores = [q.get("score", 0.0) for q in qa_history if "score" in q]
+    avg_tech_score = sum(tech_scores) / len(tech_scores) if tech_scores else 0.0
+    
+    voice_scores = [q.get("voice_metrics", {}).get("voice_score", 0.0) for q in qa_history if "voice_metrics" in q]
+    avg_voice_score = sum(voice_scores) / len(voice_scores) if voice_scores else 0.0
+    
+    # 3. Final Fusion Formula: 50% Technical + 25% Voice/Communication + 25% Camera/Behavior
+    avg_tech_score = round(avg_tech_score, 1)
+    avg_voice_score = round(avg_voice_score, 1)
+    camera_score = round(camera_score, 1)
+    fusion_score = round((avg_tech_score * 0.5) + (avg_voice_score * 0.25) + (camera_score * 0.25), 1)
+    
+    # 4. Integrate Live Warning History (Audit from frame analysis)
+    # This keeps the Haar Cascade warnings about lighting/cheating/etc as requested.
+    live_metrics = session_metrics.pop(username, {"frames": 0, "face": 0, "gaze": 0, "smile": 0, "light": 0, "multi": 0, "box": 0})
+    warning_notes = []
+    if live_metrics["light"] > 10: warning_notes.append("Issues with low lighting detected.")
+    if live_metrics["multi"] > 0: warning_notes.append("Multiple people detected during session.")
+    if live_metrics["box"] > 10: warning_notes.append("Candidate was frequently out of camera frame.")
+    
     qa_text = ""
     for item in qa_history:
-        ans = item['answer'] if len(item['answer']) > 3 else "No audible response recorded."
-        qa_text += f"Question: {item['question']}\\nCandidate Answer: {ans}\\n\\n"
+        ans = item.get('answer', "No response recorded.")
+        v_m = item.get("voice_metrics", {})
+        qa_text += f"Question: {item['question']}\nTechnical Accuracy: {item.get('accuracy', '0%')}\nCommunication Details: {v_m.get('feedback', 'N/A')}\n\n"
 
-    # Aggregated Behavioral Metrics from Frame Analysis
-    metrics = session_metrics.pop(username, {"frames": 0, "face": 0, "gaze": 0, "smile": 0, "light": 0, "multi": 0, "box": 0})
-    frames = max(1, metrics["frames"])
-    face_ratio = metrics["face"] / frames
-    gaze_ratio = metrics["gaze"] / max(1, metrics["face"])
-    smile_ratio = metrics["smile"] / max(1, metrics["face"])
+    # Prepare detailed voice metrics for the prompt
+    total_fillers = sum(q.get("voice_metrics", {}).get("filler_count", 0) for q in qa_history)
+    avg_wpm = sum(q.get("voice_metrics", {}).get("wpm", 0.0) for q in qa_history) / len(qa_history) if qa_history else 0.0
     
-    # Penalties
-    penalties = (metrics["light"] / frames) * 2 + (metrics["multi"] / frames) * 5 + (metrics["box"] / frames) * 2
-    
-    # Calculate Camera Score (0-10)
-    raw_camera_score = (face_ratio * 4.0 + gaze_ratio * 4.0 + smile_ratio * 2.0) - float(penalties)
-    camera_score = round(max(0.0, min(10.0, float(raw_camera_score))), 1)
-    
-    behavior_summary = f"Eye Contact: {round(gaze_ratio*100)}%, Detections: {metrics['face']}/{frames}, Smiles: {metrics['smile']}. "
-    if metrics["multi"] > 0: behavior_summary += "Multiple people detected. "
-    if metrics["light"] > (frames * 0.3): behavior_summary += "Low lighting detected. "
+    # Camera metrics for prompt
+    cam_m = camera_eval.get("metrics", {})
+    eye_pct = cam_m.get("eye_contact", 0.0)
+    smile_pct = cam_m.get("smile_pct", 0.0)
 
     prompt = f"""
-    Evaluate this full technical interview session professionally. 
-    BEHAVIORAL DATA: {behavior_summary}
-    CAMERA SCORE: {camera_score}/10
-    FULL TRANSCRIPT:
+    TECHNICAL: {avg_tech_score}/10
+    VOICE: {avg_voice_score}/10 (Fillers: {total_fillers}, Avg WPM: {round(avg_wpm)})
+    CAMERA: {camera_score}/10 (Eye Contact: {eye_pct}%, Smiles: {smile_pct}%)
+    FUSION: {fusion_score}/10
+    
+    AUDIT: {", ".join(warning_notes) if warning_notes else "Clean."}
+    
+    TRANSCRIPTS:
     {qa_text}
 
-    IMPORTANT: 
-    1. If the 'Candidate Answer' is "No audible response", the score for that question is 0.
-    2. Provide a detailed and professional 'ideal_answer' for every question explaining the correct answer in depth (at least 3-4 sentences detailing the proper technical concepts).
-    3. The 'improvement' field MUST detail exactly how the candidate should improve their specific answer. Explain precisely what aspects were missing or incorrect, and how to formulate a better response in detail.
-    4. Provide the EXACT text from the 'Candidate Answer' in the 'user_input' field. Do not summarize or alter the candidate's words.
-    5. Scoring: For each question accuracy, use XX% format.
+    Generate a PROFESSIONAL JSON report. 
+    Include 'filler_words_count': {total_fillers}.
+    Explicitly detail Voice (speed, fillers) and Camera (eye contact, smiles) in 'behavioral_feedback'.
+    Ensure 'final_score' is "{fusion_score}/10".
     
-    STRICTNESS RULES:
-    1. If Eye Contact is < 50%, be critical of confidence.
-    2. If the answer contains 'N/A' or is shorter than 10 words, score that question 0/10.
-
-    Return JSON with 'strict_critique' field.
-
-    Format your response as a JSON object with this exact structure:
+    Format JSON:
     {{
-      "final_score": "Score/10",
-      "overall_confidence": "Summary of behavioral metrics and camera score significance.",
-      "behavioral_feedback": "Critique of posture/eye contact/camera presence based on {camera_score} score.",
+      "final_score": "{fusion_score}/10",
+      "individual_scores": {{
+          "technical": "{avg_tech_score}/10",
+          "voice": "{avg_voice_score}/10",
+          "camera": "{camera_score}/10"
+      }},
+      "overall_confidence": "Concise summary...",
+      "behavioral_feedback": "A professional narrative describing communication and behavior...",
       "technical_report": [
          {{
-           "question": "Original question",
-           "your_answer": "Transcribed answer",
-           "accuracy": "XX%", 
-           "ideal_answer": "Detailed correct answer",
-           "improvement": "Specific improvement advice",
-           "user_input": "Exact word-for-word text"
+           "question": "...",
+           "your_answer": "...",
+           "accuracy": "XX%",
+           "ideal_answer": "...",
+           "improvement": "...",
+           "voice_stats": {{
+              "wpm": 0,
+              "fillers": 0,
+              "feedback": "..."
+           }}
          }}
-      ]
+      ],
+      "session_metrics": {{
+         "eye_contact": {eye_pct},
+         "smiles": {smile_pct},
+         "avg_wpm": {round(avg_wpm)},
+         "total_fillers": {total_fillers}
+      }}
     }}
     """
     
     try:
         response = ollama.generate(model='llama3', prompt=prompt, format='json')
         report = json.loads(response['response'])
+        
+        # Enforce string types for Flutter stability - CRITICAL: Prevent raw dicts
+        for key in ["overall_confidence", "behavioral_feedback", "final_score"]:
+            val = report.get(key)
+            if not isinstance(val, str):
+                report[key] = str(val) if val else "N/A"
+
+        # Explicitly inject metrics for frontend
+        report["filler_words_count"] = total_fillers
+        report["individual_scores"] = {
+            "technical": f"{avg_tech_score}/10",
+            "voice": f"{avg_voice_score}/10",
+            "camera": f"{camera_score}/10"
+        }
+
+        # Sync pre-evaluated details
+        for idx, q_report in enumerate(report.get("technical_report", [])):
+            if idx < len(qa_history):
+                q_report["improvement"] = str(qa_history[idx].get("improvement", q_report.get("improvement", "N/A")))
+                q_report["accuracy"] = str(qa_history[idx].get("accuracy", "0%"))
+                q_report["your_answer"] = str(qa_history[idx].get("answer", ""))
+                q_report["ideal_answer"] = str(qa_history[idx].get("ideal_answer", q_report.get("ideal_answer", "N/A")))
+                
+                # Inject Voice Metrics per question
+                v_m = qa_history[idx].get("voice_metrics", {})
+                q_report["voice_stats"] = {
+                    "wpm": v_m.get("wpm", 0),
+                    "fillers": v_m.get("filler_count", 0),
+                    "feedback": v_m.get("feedback", "N/A")
+                }
     except Exception as e:
-        print(f"Ollama Error: {e}")
-        # Fallback report if AI fails
+        print(f"Ollama Final Report Error: {e}")
         report = {
-            "final_score": "7/10",
+            "final_score": f"{fusion_score}/10",
             "overall_confidence": "Technical session completed.",
-            "behavioral_feedback": "Behavior metrics recorded.",
+            "behavioral_feedback": f"Voice Score: {avg_voice_score}. Camera Score: {camera_score}.",
+            "session_metrics": {
+                "eye_contact": eye_pct,
+                "smiles": smile_pct,
+                "avg_wpm": round(avg_wpm),
+                "total_fillers": total_fillers
+            },
             "technical_report": [
                 {
-                    "question": item['question'],
-                    "your_answer": item['answer'],
-                    "user_input": item['answer'],
-                    "accuracy": "70%",
-                    "ideal_answer": "Evaluation pending AI analysis.",
-                    "improvement": "Review technical keywords."
-                } for item in qa_history
+                    "question": q['question'],
+                    "your_answer": q.get('answer', ""),
+                    "accuracy": q.get('accuracy', "0%"),
+                    "ideal_answer": "Refer to dashboard.",
+                    "improvement": q.get('improvement', "Practice."),
+                    "voice_stats": {
+                        "wpm": q.get("voice_metrics", {}).get("wpm", 0),
+                        "fillers": q.get("voice_metrics", {}).get("filler_count", 0),
+                        "feedback": q.get("voice_metrics", {}).get("feedback", "N/A")
+                    }
+                } for q in qa_history
             ]
         }
     
-    # Calculate Content Score (Average Accuracy)
-    total_acc = 0
-    q_count = len(report.get("technical_report", []))
-    for q in report.get("technical_report", []):
-        try:
-            acc_str = str(q.get("accuracy", "0%")).replace("%", "")
-            # If answer was empty, force zero
-            user_ans = str(q.get("your_answer", "")).lower()
-            if "no audible response" in user_ans or len(user_ans) < 5:
-                total_acc += 0
-            else:
-                total_acc += float(acc_str) / 10
-        except:
-            total_acc += 0
-    content_score = round(total_acc / max(1, q_count), 1)
-    
-    # Calculate final score based on 70% content + 30% camera
-    final_calculated_score = round((float(content_score) * 0.7) + (float(camera_score) * 0.3), 1)
-    
-    # Add explicit scores to the report for frontend
-    final_report: Dict[str, Any] = dict(report)
-    final_report["content_score"] = content_score
+    # 5. Persistent DB Storage
+    final_report = dict(report)
+    final_report["content_score"] = avg_tech_score
     final_report["camera_score"] = camera_score
-    final_report["final_score"] = final_calculated_score
+    final_report["voice_score"] = avg_voice_score
+    final_report["final_score"] = fusion_score
+    final_report["filler_words_count"] = total_fillers
+    final_report["eye_contact_percent"] = eye_pct
+    final_report["smile_percent"] = smile_pct
+
+    # Ensure individual_scores exists for DB retrieval stability
+    final_report["individual_scores"] = {
+        "technical": f"{avg_tech_score}/10",
+        "voice": f"{avg_voice_score}/10",
+        "camera": f"{camera_score}/10"
+    }
     
-    # Inline DB write logic matching the rest of the application
+    # EXPLICITLY STORE TRANSCRIPTS in the report if AI missed them
+    for idx, detail in enumerate(final_report.get("technical_report", [])):
+        if idx < len(qa_history):
+            # Prioritize the actual recorded answer
+            detail["your_answer"] = qa_history[idx].get("answer", detail.get("your_answer", ""))
+            detail["user_input"] = detail["your_answer"]
+            # Ensure voice_stats is preserved
+            if "voice_stats" not in detail:
+                 v_m = qa_history[idx].get("voice_metrics", {})
+                 detail["voice_stats"] = {
+                    "wpm": v_m.get("wpm", 0),
+                    "fillers": v_m.get("filler_count", 0),
+                    "feedback": v_m.get("feedback", "N/A")
+                }
+
     db = SessionLocal()
     try:
         from models import Score, InterviewDetail
+        # Store detailed breakdown in confidence field for history retrieval
+        confidence_data = {
+            "vision": behavior_full, 
+            "voice": {
+                "avg_score": avg_voice_score,
+                "details": [q.get("voice_metrics", {}) for q in qa_history]
+            }, 
+            "warnings": warning_notes,
+            "scores": {
+                "tech": avg_tech_score,
+                "voice": avg_voice_score,
+                "camera": camera_score
+            }
+        }
         
-        # Use Score model for consistent insertion and easier ID retrieval
         new_result = Score(
-            username=username.strip(),
+            username=username,
             category="INTERVIEW",
-            score=final_calculated_score,
-            area="Technical",
-            confidence=json.dumps(behavior_metrics),
-            total_questions=len(qa_history) if qa_history else 5
+            score=fusion_score,
+            area="Confidence Evaluation",
+            confidence=json.dumps(confidence_data),
+            total_questions=10,
+            timestamp=datetime.now(timezone.utc)
         )
         db.add(new_result)
         db.commit()
         db.refresh(new_result)
         res_id = new_result.id
 
-        # Store detailed interview data in InterviewDetail table
         for detail in final_report.get("technical_report", []):
-            try:
-                new_detail = InterviewDetail(
-                    result_id=res_id,
-                    question=detail.get("question", ""),
-                    user_answer=detail.get("your_answer", detail.get("user_input", "")),
-                    ideal_answer=detail.get("ideal_answer", ""),
-                    improvement=detail.get("improvement", ""),
-                    accuracy=str(detail.get("accuracy", "0%"))
-                )
-                db.add(new_detail)
-            except Exception as ed:
-                print(f"Error saving interview detail: {ed}")
-        
+            db.add(InterviewDetail(
+                result_id=res_id,
+                question=detail.get("question", ""),
+                user_answer=detail.get("your_answer", ""),
+                ideal_answer=detail.get("ideal_answer", ""),
+                improvement=detail.get("improvement", ""),
+                accuracy=str(detail.get("accuracy", "0%"))
+            ))
         db.commit()
-        print(f"✅ Successfully saved interview session {res_id} for {username}")
     except Exception as e:
-        print(f"❌ Error saving final interview report to db: {e}")
+        print(f"DB WRITE ERROR: {e}")
         db.rollback()
     finally:
         db.close()
 
-    session_answers[username] = [] 
-    if username in session_metrics:
-        del session_metrics[username]
-        
     if os.path.exists(v_path): os.remove(v_path)
-    
+    session_answers[username] = [] 
     return final_report
 
 
@@ -2200,11 +2508,11 @@ async def get_performance_by_date(username: str, target_date: str, db: Session =
         performance = {"aptitude": [], "technical": [], "interview": [], "gd": []}
         for cat in ["APTITUDE", "TECHNICAL", "INTERVIEW", "GD"]:
             res = db.execute(text("""
-                SELECT DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)), AVG(score) 
+                SELECT DATE(timestamp), MAX(score) 
                 FROM results 
                 WHERE username = :u AND category = :cat 
-                AND DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE) BETWEEN :start AND :end
-                GROUP BY DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE))
+                AND DATE(timestamp) BETWEEN :start AND :end
+                GROUP BY DATE(timestamp)
             """), {"u": username, "cat": cat, "start": monday, "end": sunday}).fetchall()
             
             performance[cat.lower()] = [{"day": str(r[0]), "score": float(r[1])} for r in res]
@@ -2248,6 +2556,11 @@ async def get_session_detail(category: str, session_id: int, db: Session = Depen
             return {
                 "area": score.area if score else "Interview",
                 "behavioral_report": behavioral,
+                "scores": behavioral.get("scores", {
+                    "tech": score.score if score else 0.0,
+                    "voice": behavioral.get("voice", {}).get("avg_score", 0.0),
+                    "camera": behavioral.get("vision", {}).get("camera_score", 0.0)
+                }),
                 "technical_report": [
                     {
                         "question": d.question,
@@ -2278,6 +2591,8 @@ async def get_session_detail(category: str, session_id: int, db: Session = Depen
             
             return {
                 "area": score.area if score else "General",
+                "score": score.score if score else 0.0,
+                "scores": {"total": score.score if score else 0.0},
                 "questions": detailed_qs
             }
     except Exception as e:

@@ -1,22 +1,22 @@
 import 'package:flutter/material.dart';
 import '../services/teacher_api_service.dart';
-import 'teacher_dashboard_screen.dart';
 
-class TeacherLoginScreen extends StatefulWidget {
-  const TeacherLoginScreen({Key? key}) : super(key: key);
+class TeacherRegisterScreen extends StatefulWidget {
+  const TeacherRegisterScreen({Key? key}) : super(key: key);
 
   @override
-  _TeacherLoginScreenState createState() => _TeacherLoginScreenState();
+  _TeacherRegisterScreenState createState() => _TeacherRegisterScreenState();
 }
 
-class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
+class _TeacherRegisterScreenState extends State<TeacherRegisterScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _secretCodeController = TextEditingController();
   bool _isLoading = false;
   String? _errorMessage;
 
-  Future<void> _handleLogin() async {
+  Future<void> _handleRegister() async {
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -27,20 +27,21 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
     });
 
     try {
-      final response = await TeacherApiService.login(
-        _usernameController.text.trim(),
+      await TeacherApiService.register(
+        _emailController.text.trim(),
         _passwordController.text,
+        _secretCodeController.text.trim(),
       );
 
       if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => TeacherDashboardScreen(
-              teacherName: response['username'],
-            ),
+        // Registration successful! We can alert the user and redirect to login
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Registration successful! Please log in.'),
+            backgroundColor: Colors.green,
           ),
         );
+        Navigator.pushReplacementNamed(context, '/teacher_login');
       }
     } catch (e) {
       setState(() {
@@ -82,13 +83,13 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Icon(
-                          Icons.school,
+                          Icons.person_add_alt_1,
                           size: 64,
                           color: Colors.blue.shade700,
                         ),
                         const SizedBox(height: 16),
                         Text(
-                          'Teacher Login',
+                          'Teacher Registration',
                           style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.blue.shade900,
@@ -97,7 +98,7 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Access Student Progress Dashboard',
+                          'Authorized Academic Staff Only',
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                 color: Colors.grey.shade600,
                               ),
@@ -105,7 +106,7 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                         ),
                         const SizedBox(height: 32),
                         TextFormField(
-                          controller: _usernameController,
+                          controller: _emailController,
                           decoration: InputDecoration(
                             labelText: 'College Email (@rajagiritech.edu.in)',
                             prefixIcon: const Icon(Icons.email),
@@ -136,7 +137,29 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                           ),
                           validator: (value) {
                             if (value == null || value.isEmpty) {
-                              return 'Please enter password';
+                              return 'Please enter a password';
+                            }
+                            if (value.length < 6) {
+                              return 'Password must be at least 6 characters';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _secretCodeController,
+                          obscureText: true,
+                          decoration: InputDecoration(
+                            labelText: 'Secret Access Code',
+                            prefixIcon: const Icon(Icons.vpn_key),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            helperText: 'Required for new teacher approval',
+                          ),
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Please enter the secret access code';
                             }
                             return null;
                           },
@@ -166,7 +189,7 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                         ],
                         const SizedBox(height: 24),
                         ElevatedButton(
-                          onPressed: _isLoading ? null : _handleLogin,
+                          onPressed: _isLoading ? null : _handleRegister,
                           style: ElevatedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
@@ -184,7 +207,7 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                                   ),
                                 )
                               : const Text(
-                                  'Login',
+                                  'Register',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.bold,
@@ -195,20 +218,11 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
                         const SizedBox(height: 16),
                         TextButton(
                           onPressed: () {
-                            Navigator.pushReplacementNamed(context, '/teacher_register');
+                            Navigator.pushReplacementNamed(context, '/teacher_login');
                           },
                           child: const Text(
-                            'Need an account? Register as Teacher',
+                            'Already registered? Log In',
                             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pushReplacementNamed(context, '/login');
-                          },
-                          child: const Text(
-                            'Back to Student Login',
-                            style: TextStyle(color: Colors.white70),
                           ),
                         ),
                       ],
@@ -225,8 +239,9 @@ class _TeacherLoginScreenState extends State<TeacherLoginScreen> {
 
   @override
   void dispose() {
-    _usernameController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
+    _secretCodeController.dispose();
     super.dispose();
   }
 }

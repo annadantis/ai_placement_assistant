@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:intl/intl.dart';
 import '../providers/auth_provider.dart';
 import '../api_config.dart';
+import '../widgets/report_detail_dialog.dart';
 
 class DailyReportScreen extends StatefulWidget {
   const DailyReportScreen({Key? key}) : super(key: key);
@@ -134,33 +135,48 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
     return _buildResultCard(
       title: category,
       children: results.map((res) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 15),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Area: ${res['area'] ?? 'General'}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                    Text("Time: ${res['timestamp']?.toString().split(' ').last.split('.').first ?? ''}", style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                  ],
-                ),
+        return InkWell(
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (context) => ReportDetailDialog(
+                category: category.contains("Technical") ? "TECHNICAL" : "APTITUDE",
+                sessionId: res['id'],
+                date: res['timestamp'] ?? DateFormat('yyyy-MM-dd').format(selectedDate),
+                score: "${res['score']}/${res['total_questions']}",
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.purpleAccent.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.purpleAccent.withOpacity(0.5)),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 15),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Area: ${res['area'] ?? 'General'}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                      Text("Time: ${res['timestamp']?.toString().split(' ').last.split('.').first ?? ''}", style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                    ],
+                  ),
                 ),
-                child: Text(
-                  "${res['score']}/${res['total_questions']}",
-                  style: const TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.purpleAccent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.purpleAccent.withOpacity(0.5)),
+                  ),
+                  child: Text(
+                    "${res['score']}/${res['total_questions']}",
+                    style: const TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold),
+                  ),
                 ),
-              )
-            ],
+                const SizedBox(width: 8),
+                const Icon(Icons.chevron_right, color: Colors.white24, size: 16),
+              ],
+            ),
           ),
         );
       }).toList(),
@@ -178,25 +194,47 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
     return _buildResultCard(
       title: "Interview Practice",
       children: results.map((res) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 15),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text("Overall Score:", style: TextStyle(color: Colors.white70)),
-                  Text("${res['score'] ?? 0}/10", style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16)),
-                ],
+        return InkWell(
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (context) => ReportDetailDialog(
+                category: "INTERVIEW",
+                sessionId: res['id'],
+                date: res['timestamp'] ?? DateFormat('yyyy-MM-dd').format(selectedDate),
+                score: "${res['score'] ?? 0}/10",
               ),
-              const SizedBox(height: 8),
-              if (res['confidence'] != null && res['confidence'].toString().isNotEmpty)
-                Text(
-                  "Analysis: ${res['confidence']}",
-                  style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
-                )
-            ],
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 15),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Interview Session", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                      if (res['confidence'] != null && res['confidence'].toString().isNotEmpty)
+                        Text(
+                          "Analysis: ${res['confidence']}",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
+                    ],
+                  ),
+                ),
+                Row(
+                  children: [
+                    Text("${res['score'] ?? 0}/10", style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.chevron_right, color: Colors.white24, size: 16),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       }).toList(),
@@ -214,27 +252,54 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
     return _buildResultCard(
       title: "Group Discussion",
       children: results.map((res) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 15),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text("Final GD Score:", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                  Text("${res['final_score'] ?? 0}/100", style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-                ],
+        return InkWell(
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (context) => ReportDetailDialog(
+                category: "GD",
+                sessionId: res['id'],
+                date: res['timestamp'] ?? DateFormat('yyyy-MM-dd').format(selectedDate),
+                score: "${res['final_score'] ?? 0}/100",
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  _miniStat("Content", "${res['content_score'] ?? 0}/10"),
-                  const SizedBox(width: 15),
-                  _miniStat("Communication", "${res['communication_score'] ?? 0}/10"),
-                ],
-              )
-            ],
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 15),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("GD Session", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                          Text("Time: ${res['timestamp']?.toString().split(' ').last.split('.').first ?? ''}", style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Text("${res['final_score'] ?? 0}/100", style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.chevron_right, color: Colors.white24, size: 16),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _miniStat("Content", "${res['content_score'] ?? 0}/10"),
+                    const SizedBox(width: 15),
+                    _miniStat("Communication", "${res['communication_score'] ?? 0}/10"),
+                  ],
+                )
+              ],
+            ),
           ),
         );
       }).toList(),
@@ -269,7 +334,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      "Daily Report",
+                      "Report",
                       style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 5),

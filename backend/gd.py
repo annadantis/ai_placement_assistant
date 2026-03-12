@@ -1,4 +1,5 @@
 from database import SessionLocal, get_db
+from typing import Optional, Dict, List
 from gd_evaluator import evaluate_gd
 from camera_eval import CameraEvaluator
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
@@ -10,6 +11,10 @@ import json
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
+from datetime import datetime, timezone, timedelta
+
+def get_ist_now():
+    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
 
 class GDResponse(BaseModel):
     topic: str
@@ -27,6 +32,8 @@ class GDResponse(BaseModel):
     improved_answer: str
     ideal_answer: str
     strategy_note: str
+    session_metrics: Optional[dict] = None # For Eye Contact, etc.
+    individual_scores: Optional[dict] = None # For professional gauge display
 
 
 router = APIRouter()
@@ -73,9 +80,11 @@ async def submit_gd(
     topic_id: int = Form(...),
     audio: UploadFile = File(...),
     video: UploadFile = File(...),
+    username: str = Form("Anonymous"),
     db: Session = Depends(get_db)
 ):
     os.makedirs("uploads", exist_ok=True)
+
 
     # ---------- SAVE AUDIO ----------
     raw_audio_path = f"uploads/{uuid.uuid4()}_{audio.filename}"
@@ -85,9 +94,13 @@ async def submit_gd(
 
     # ---------- SAVE VIDEO ----------
     video_path = f"uploads/{uuid.uuid4()}_{video.filename}"
+    v_bytes = await video.read()
+    print(f"DEBUG: GD Video received from {username}, size: {len(v_bytes)} bytes")
 
     with open(video_path, "wb") as f:
-        f.write(await video.read())
+        f.write(v_bytes)
+    
+    print(f"DEBUG: GD Video saved to {video_path}")
 
     # ---------- CONVERT AUDIO TO WAV ----------
     if raw_audio_path.lower().endswith(".wav"):
@@ -129,10 +142,10 @@ async def submit_gd(
     # ---------- INSERT INITIAL ROW ----------
     insert = db.execute(
         text("""
-            INSERT INTO gd_results (topic_id, user_answer)
-            VALUES (:tid, :ans)
+            INSERT INTO gd_results (topic_id, username, user_answer)
+            VALUES (:tid, :u, :ans)
         """),
-        {"tid": topic_id, "ans": transcript}
+        {"tid": topic_id, "u": username, "ans": transcript}
     )
     db.commit()
     # Handle both SQLAlchemy Result object versions
@@ -209,8 +222,32 @@ async def submit_gd(
         }
     )
     db.commit()
-    
+
+    # --- Also insert into main 'results' table so it shows up in the dashboard and analytics graphs ---
+    overall_score = evaluation["overall_score"]
+
+    try:
+        db.execute(
+            text("""
+                INSERT INTO results (username, category, score, total_questions, area, timestamp)
+                VALUES (:username, 'GD', :score, :total, :area, :ts)
+            """),
+            {
+                "username": username,
+                "score": overall_score,
+                "total": 10,  # GD scored out of 10
+                "area": topic_text[:100] if topic_text else "GD Session",
+                "ts": datetime.now(timezone.utc),
+            }
+        )
+        db.commit()
+        print(f"✅ GD result saved to results table for {username}: {overall_score}/10")
+    except Exception as e:
+        db.rollback()
+        print(f"⚠️ Could not save GD result to main results table: {e}")
+
     print("FINAL OUTPUT:", evaluation)
+
 
     # ---------- RESPONSE ----------
     return {
@@ -229,6 +266,12 @@ async def submit_gd(
         "improved_answer": evaluation.get("improved_answer", ""),
         "ideal_answer": evaluation.get("ideal_answer", ""),
         "strategy_note": evaluation.get("strategy_note", ""),
+        "session_metrics": camera_results.get("metrics", {}),
+        "individual_scores": {
+            "technical": f"{evaluation['content_score']}/10",
+            "voice": f"{evaluation['voice_score']}/10",
+            "camera": f"{camera_score}/10"
+        }
     }
 
 

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:convert';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:placement_assistant/widgets/loading_overlay.dart';
 import '../providers/auth_provider.dart';
 import '../api_config.dart';
 import 'quiz_screen.dart';
@@ -17,6 +18,7 @@ import '../widgets/branch_selection_dialog.dart';
 import '../widgets/news_notification.dart';
 import 'login_screen.dart';
 import 'daily_report_screen.dart';
+import 'instructions_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -678,19 +680,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  OverlayEntry? _trendsOverlayEntry;
+
   void _showTrendsPopup() async {
     if (_trendsShown) return;
     _trendsShown = true;
 
-    showDialog(
-      context: context,
-      builder: (context) => _TrendsDialog(),
+    // Fetch in background, then show a side panel
+    final data = await ApiConfig.fetchLatestNews().then((v) => v.take(4).toList()).catchError((_) => <dynamic>[]);
+    if (!mounted) return;
+
+    _trendsOverlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: 80,
+        right: 16,
+        child: _TrendsSidePanel(
+          items: data,
+          onDismiss: () {
+            _trendsOverlayEntry?.remove();
+            _trendsOverlayEntry = null;
+          },
+        ),
+      ),
     );
+    Overlay.of(context).insert(_trendsOverlayEntry!);
+
+    // Auto-dismiss after 15 seconds
+    Future.delayed(const Duration(seconds: 15), () {
+      if (_trendsOverlayEntry?.mounted ?? false) {
+        _trendsOverlayEntry?.remove();
+        _trendsOverlayEntry = null;
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Scaffold(backgroundColor: Color(0xFF0F0C29), body: Center(child: CircularProgressIndicator()));
+    if (loading) return PremiumLoadingOverlay(message: "Initializing Dashboard...");
     
     final auth = Provider.of<AuthProvider>(context);
     const Color sidebarBg = Color(0xFF161625);
@@ -717,13 +743,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _sidebarTile(1, Icons.code, "Technical Practice", onTap: () => _startQuiz(context, "TECHNICAL")),
                 _sidebarTile(2, Icons.psychology_outlined, "Aptitude Practice", onTap: () => _startQuiz(context, "APTITUDE")),
                 
-                // FIXED ERROR HERE: Removed any internal 'const' that could conflict with Navigator
                 _sidebarTile(3, Icons.groups_outlined, "GD Practice", onTap: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const GdScreen()));
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => InstructionsScreen(
+                    category: 'GD',
+                    onStart: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const GdScreen())),
+                  )));
                 }),
                 
-                _sidebarTile(4, Icons.mic_none, "Interview Practice", onTap: () {  
-                   Navigator.push(context, MaterialPageRoute(builder: (_) => const InterviewScreen()));
+                _sidebarTile(4, Icons.mic_none, "Interview Practice", onTap: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => InstructionsScreen(
+                    category: 'INTERVIEW',
+                    onStart: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const InterviewScreen())),
+                  )));
                 }),
 
                 _sidebarTile(5, Icons.auto_graph, "Industry Trends", onTap: () {
@@ -731,7 +762,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _loadNews();
                 }),
                 
-                _sidebarTile(6, Icons.calendar_month, "Daily Report", onTap: () {
+                _sidebarTile(6, Icons.calendar_month, "Report", onTap: () {
                   setState(() => _selectedIndex = 6);
                 }),
 
@@ -1087,27 +1118,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _startQuiz(BuildContext context, String cat) async {
-    // For Technical quiz, show branch selection first (Practice Mode)
-    if (cat == "TECHNICAL") {
-      final selectedBranch = await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => BranchSelectionDialog(initialBranch: data?['branch'], practiceMode: true),
-      );
-      
-      if (selectedBranch != null && context.mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => QuizScreen(category: cat, targetBranch: selectedBranch)),
-        ).then((_) => loadData());
-      }
-    } else {
-      // For Aptitude, start directly
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => QuizScreen(category: cat)),
-      ).then((_) => loadData());
-    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => InstructionsScreen(
+          category: cat,
+          onStart: () async {
+            if (cat == "TECHNICAL") {
+              // For Technical quiz, show branch selection first
+              if (!context.mounted) return;
+              final selectedBranch = await showDialog<String>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => BranchSelectionDialog(initialBranch: data?['branch'], practiceMode: true),
+              );
+              if (selectedBranch != null && context.mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => QuizScreen(category: cat, targetBranch: selectedBranch)),
+                ).then((_) => loadData());
+              }
+            } else {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => QuizScreen(category: cat)),
+              ).then((_) => loadData());
+            }
+          },
+        ),
+      ),
+    );
   }
 
   void _showBranchSelection() {
@@ -1123,114 +1163,525 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-class _TrendsDialog extends StatefulWidget {
+// ────────────────────────────────────────────────────────────────────────────
+// SESSION HISTORY
+// ────────────────────────────────────────────────────────────────────────────
+
+class _SessionHistoryView extends StatefulWidget {
+  final String username;
+  const _SessionHistoryView({required this.username});
+
   @override
-  State<_TrendsDialog> createState() => _TrendsDialogState();
+  State<_SessionHistoryView> createState() => _SessionHistoryViewState();
 }
 
-class _TrendsDialogState extends State<_TrendsDialog> {
-  List<dynamic>? trends;
-  bool loading = true;
-  final FlutterTts _flutterTts = FlutterTts();
+class _SessionHistoryViewState extends State<_SessionHistoryView> {
+  List<dynamic>? _sessions;
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _fetchTrends();
+    _loadHistory();
   }
 
-  Future<void> _fetchTrends() async {
+  Future<void> _loadHistory() async {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
     try {
-      final data = await ApiConfig.fetchLatestNews();
-      if (mounted) {
+      final res = await http.get(Uri.parse('${auth.baseUrl}/results/${widget.username}'));
+      if (res.statusCode == 200) {
         setState(() {
-          trends = data;
-          loading = false;
+          _sessions = jsonDecode(res.body);
+          _loading = false;
         });
+      } else {
+        setState(() => _loading = false);
       }
     } catch (e) {
-      if (mounted) setState(() => loading = false);
+      setState(() => _loading = false);
+    }
+  }
+
+  String _getCategoryIcon(String cat) {
+    switch (cat.toUpperCase()) {
+      case 'INTERVIEW': return '🎤';
+      case 'APTITUDE': return '🧠';
+      case 'TECHNICAL': return '💻';
+      case 'GD': return '💬';
+      default: return '📝';
+    }
+  }
+
+  Color _getCategoryColor(String cat) {
+    switch (cat.toUpperCase()) {
+      case 'INTERVIEW': return Colors.purpleAccent;
+      case 'APTITUDE': return Colors.cyanAccent;
+      case 'TECHNICAL': return Colors.orangeAccent;
+      case 'GD': return Colors.greenAccent;
+      default: return Colors.white54;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFF161625),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-      child: Container(
-        width: 500,
-        height: 600,
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Industry Trends", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                    Text("Stay updated with the latest tech news", style: TextStyle(color: Colors.white38, fontSize: 12)),
-                  ],
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white54),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history_edu_outlined, color: Colors.purpleAccent, size: 28),
+              const SizedBox(width: 12),
+              const Text("Session History", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.refresh, color: Colors.white38),
+                onPressed: () { setState(() => _loading = true); _loadHistory(); },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text("Tap any session to view your full report.", style: TextStyle(color: Colors.white38, fontSize: 13)),
+          const SizedBox(height: 24),
+          if (_loading)
+            const Center(child: CircularProgressIndicator(color: Colors.purpleAccent))
+          else if (_sessions == null || _sessions!.isEmpty)
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 80),
+                  const Icon(Icons.inbox_outlined, color: Colors.white24, size: 64),
+                  const SizedBox(height: 16),
+                  const Text("No sessions yet.", style: TextStyle(color: Colors.white38, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  const Text("Complete a quiz or interview to see your history here.", style: TextStyle(color: Colors.white24, fontSize: 13)),
+                ],
+              ),
+            )
+          else
             Expanded(
-              child: loading
-                  ? const Center(child: CircularProgressIndicator(color: Colors.purpleAccent))
-                  : trends == null || trends!.isEmpty
-                      ? const Center(child: Text("No trending topics found", style: TextStyle(color: Colors.white38)))
-                      : ListView.builder(
-                          itemCount: trends!.length,
-                          itemBuilder: (context, index) {
-                            final item = trends![index];
-                            return _buildPopupNewsCard(item);
-                          },
+              child: RefreshIndicator(
+                onRefresh: _loadHistory,
+                child: ListView.builder(
+                  itemCount: _sessions!.length,
+                  itemBuilder: (context, index) {
+                    final s = _sessions![index];
+                    final cat = s['category'] as String? ?? 'N/A';
+                    final score = double.tryParse(s['score'].toString()) ?? 0.0;
+                    final color = _getCategoryColor(cat);
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.03),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: color.withOpacity(0.15)),
+                      ),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        leading: Container(
+                          width: 50,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Center(child: Text(_getCategoryIcon(cat), style: const TextStyle(fontSize: 22))),
                         ),
-            ),
-            const SizedBox(height: 15),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.purpleAccent,
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        title: Text(
+                          "${cat.toUpperCase()}  —  ${s['area'] ?? 'General'}",
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            "${s['date']?.toString().substring(0, 16) ?? ''}".replaceAll('T', ' '),
+                            style: const TextStyle(color: Colors.white38, fontSize: 11),
+                          ),
+                        ),
+                        trailing: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            "${score.toStringAsFixed(1)} / 10",
+                            style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                        onTap: () => _showReportDialog(context, s),
+                      ),
+                    );
+                  },
                 ),
-                onPressed: () => Navigator.pop(context),
-                child: const Text("Got it!", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
             ),
-          ],
+        ],
+      ),
+    );
+  }
+
+  void _showReportDialog(BuildContext context, Map<String, dynamic> session) {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    showDialog(
+      context: context,
+      builder: (_) => _ReportDetailDialog(
+        session: session,
+        baseUrl: auth.baseUrl,
+      ),
+    );
+  }
+}
+
+// ─── REPORT DETAIL DIALOG ───────────────────────────────────────────────────
+
+class _ReportDetailDialog extends StatefulWidget {
+  final Map<String, dynamic> session;
+  final String baseUrl;
+  const _ReportDetailDialog({required this.session, required this.baseUrl});
+
+  @override
+  State<_ReportDetailDialog> createState() => _ReportDetailDialogState();
+}
+
+class _ReportDetailDialogState extends State<_ReportDetailDialog> {
+  Map<String, dynamic>? _detail;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchDetail();
+  }
+
+  Future<void> _fetchDetail() async {
+    try {
+      final id = widget.session['id'];
+      final cat = widget.session['category'];
+      final res = await http.get(Uri.parse('${widget.baseUrl}/session_detail/$cat/$id'));
+      if (res.statusCode == 200) {
+        setState(() { _detail = jsonDecode(res.body); _loading = false; });
+      } else {
+        setState(() => _loading = false);
+      }
+    } catch (e) {
+      setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cat = (widget.session['category'] as String? ?? '').toUpperCase();
+    return Dialog(
+      backgroundColor: const Color(0xFF161625),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 780, maxHeight: 720),
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      "$cat Session Report",
+                      style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    "${(double.tryParse(widget.session['score'].toString()) ?? 0.0).toStringAsFixed(1)} / 10",
+                    style: const TextStyle(color: Colors.purpleAccent, fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 12),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white54),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              Text(
+                "Area: ${widget.session['area'] ?? 'General'}  •  ${(widget.session['date'] as String? ?? '').replaceAll('T', ' ').substring(0, 16)}",
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              const Divider(color: Colors.white10),
+              const SizedBox(height: 12),
+              if (_loading)
+                const Expanded(child: Center(child: CircularProgressIndicator(color: Colors.purpleAccent)))
+              else if (_detail == null)
+                const Expanded(child: Center(child: Text("Could not load report.", style: TextStyle(color: Colors.white38))))
+              else
+                Expanded(child: SingleChildScrollView(child: _buildDetailBody(cat))),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.check, color: Colors.purpleAccent),
+                  label: const Text("Close", style: TextStyle(color: Colors.purpleAccent)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildPopupNewsCard(dynamic item) {
-    return Card(
-      color: Colors.white.withOpacity(0.05),
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        title: Text(item['title'] ?? 'No Title', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-        trailing: IconButton(
-          icon: const Icon(Icons.volume_up, color: Colors.purpleAccent, size: 18),
-          onPressed: () async {
-             final summary = await ApiConfig.fetchNewsSummary(item['title'] ?? '');
-             await _flutterTts.setLanguage("en-US");
-             await _flutterTts.speak(summary);
-          },
+  Widget _buildDetailBody(String cat) {
+    final d = _detail!;
+
+    if (cat == 'INTERVIEW') {
+      final behavioral = d['behavioral_report'] as Map<String, dynamic>? ?? {};
+      final scores = d['scores'] as Map<String, dynamic>? ?? {};
+      final techReport = (d['technical_report'] as List?) ?? [];
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Score Cards
+          Row(
+            children: [
+              _scoreChip("Technical", "${scores['tech'] ?? 'N/A'}", Colors.cyanAccent),
+              const SizedBox(width: 10),
+              _scoreChip("Voice", "${scores['voice'] ?? 'N/A'}", Colors.purpleAccent),
+              const SizedBox(width: 10),
+              _scoreChip("Camera", "${scores['camera'] ?? 'N/A'}", Colors.blueAccent),
+            ],
+          ),
+          if (behavioral['behavioral_feedback'] != null || behavioral['overall_confidence'] != null) ...[
+            const SizedBox(height: 20),
+            _sectionBox("Behavioral Summary", behavioral['behavioral_feedback']?.toString() ?? behavioral['overall_confidence']?.toString() ?? "N/A", Colors.purpleAccent),
+          ],
+          const SizedBox(height: 20),
+          const Text("QUESTION BREAKDOWN", style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+          const SizedBox(height: 12),
+          ...techReport.map((q) => Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(16)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+                    child: Text(q['accuracy'] ?? "N/A", style: const TextStyle(color: Colors.cyanAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(q['question'] ?? "", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14))),
+                ]),
+                const SizedBox(height: 12),
+                _answerRow("YOUR RESPONSE", q['your_answer'] ?? "N/A", Colors.white70),
+                const SizedBox(height: 10),
+                _answerRow("IDEAL ANSWER", q['ideal_answer'] ?? "N/A", Colors.greenAccent),
+                const SizedBox(height: 10),
+                _answerRow("IMPROVEMENT", q['improvement'] ?? "N/A", Colors.orangeAccent),
+              ],
+            ),
+          )),
+        ],
+      );
+    } else if (cat == 'GD') {
+      final scores = d['scores'] as Map<String, dynamic>? ?? {};
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          _scoreChip("Content", "${scores['content'] ?? 'N/A'}", Colors.greenAccent),
+          const SizedBox(width: 10),
+          _scoreChip("Communication", "${scores['communication'] ?? 'N/A'}", Colors.purpleAccent),
+          const SizedBox(width: 10),
+          _scoreChip("Camera", "${scores['camera'] ?? 'N/A'}", Colors.blueAccent),
+        ]),
+        const SizedBox(height: 20),
+        if (d['feedback'] != null) _sectionBox("Feedback", d['feedback'].toString(), Colors.greenAccent),
+        if (d['ideal_answer'] != null) ...[
+          const SizedBox(height: 16),
+          _sectionBox("Ideal Response", d['ideal_answer'].toString(), Colors.cyanAccent),
+        ],
+        if (d['transcript'] != null) ...[
+          const SizedBox(height: 16),
+          _sectionBox("Your Transcript", d['transcript'].toString(), Colors.white70),
+        ],
+      ]);
+    } else {
+      // QUIZ (APTITUDE / TECHNICAL)
+      final questions = (d['questions'] as List?) ?? [];
+      int correct = questions.where((q) => q['is_correct'] == true).length;
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _scoreChip("Score", "$correct / ${questions.length}", Colors.cyanAccent),
+        const SizedBox(height: 20),
+        const Text("QUESTION BREAKDOWN", style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+        const SizedBox(height: 12),
+        ...questions.asMap().entries.map((entry) {
+          final i = entry.key;
+          final q = entry.value;
+          final isCorrect = q['is_correct'] == true;
+          final badgeColor = isCorrect ? Colors.greenAccent : Colors.redAccent;
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: badgeColor.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: badgeColor.withOpacity(0.12)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(isCorrect ? Icons.check_circle_outline : Icons.cancel_outlined, color: badgeColor, size: 18),
+                const SizedBox(width: 8),
+                Expanded(child: Text("Q${i+1}. ${q['question'] ?? ''}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13))),
+              ]),
+              const SizedBox(height: 10),
+              _answerRow("YOUR ANSWER", q['user_selected']?.toString() ?? "N/A", isCorrect ? Colors.greenAccent : Colors.redAccent),
+              if (!isCorrect) ...[
+                const SizedBox(height: 6),
+                _answerRow("CORRECT ANSWER", q['correct_answer']?.toString() ?? "N/A", Colors.greenAccent),
+              ],
+              if (q['explanation'] != null) ...[
+                const SizedBox(height: 6),
+                _answerRow("EXPLANATION", q['explanation'].toString(), Colors.white38),
+              ],
+            ]),
+          );
+        }),
+      ]);
+    }
+  }
+
+  Widget _scoreChip(String label, String value, Color color) {
+    return Flexible(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(12)),
+        child: Column(children: [
+          Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w700)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _sectionBox(String title, String content, Color color) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(title, style: TextStyle(color: color.withOpacity(0.5), fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+      const SizedBox(height: 6),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: color.withOpacity(0.04), borderRadius: BorderRadius.circular(12)),
+        child: Text(content, style: TextStyle(color: color, fontSize: 13, height: 1.5)),
+      ),
+    ]);
+  }
+
+  Widget _answerRow(String label, String text, Color color) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: TextStyle(color: color.withOpacity(0.5), fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+      const SizedBox(height: 4),
+      Text(text, style: TextStyle(color: color, fontSize: 13, height: 1.4)),
+    ]);
+  }
+}
+
+class _TrendsSidePanel extends StatefulWidget {
+  final List<dynamic> items;
+  final VoidCallback onDismiss;
+
+  const _TrendsSidePanel({required this.items, required this.onDismiss});
+
+  @override
+  State<_TrendsSidePanel> createState() => _TrendsSidePanelState();
+}
+
+class _TrendsSidePanelState extends State<_TrendsSidePanel>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<Offset> _slide;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 350));
+    _slide = Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _dismiss() {
+    _ctrl.reverse().then((_) => widget.onDismiss());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SlideTransition(
+      position: _slide,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 300,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1B3A),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.purpleAccent.withOpacity(0.4)),
+            boxShadow: [BoxShadow(color: Colors.purple.withOpacity(0.3), blurRadius: 20, offset: const Offset(-4, 4))],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.trending_up, color: Colors.purpleAccent, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text("Industry Trends",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                  ),
+                  GestureDetector(
+                    onTap: _dismiss,
+                    child: const Icon(Icons.close, color: Colors.white38, size: 16),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text("Top headlines right now", style: TextStyle(color: Colors.white38, fontSize: 10)),
+              const Divider(height: 16, color: Colors.white12),
+              if (widget.items.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text("No trends available", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                )
+              else
+                ...widget.items.map((item) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(width: 4, height: 4, margin: const EdgeInsets.fromLTRB(0, 6, 8, 0),
+                          decoration: const BoxDecoration(color: Colors.purpleAccent, shape: BoxShape.circle)),
+                      Expanded(child: Text(item['title'] ?? '', maxLines: 2, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4))),
+                    ],
+                  ),
+                )),
+            ],
+          ),
         ),
-        onTap: () => showNewsSummaryDialog(context, item),
       ),
     );
   }

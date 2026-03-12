@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:ui';
 import 'package:provider/provider.dart';
+import 'package:placement_assistant/widgets/loading_overlay.dart';
 import '../providers/auth_provider.dart';
 
 class LeaderboardScreen extends StatefulWidget {
@@ -49,6 +50,8 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (isLoading) return PremiumLoadingOverlay(message: "Calculating Rankings...");
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       body: Stack(
@@ -68,9 +71,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                     children: [
                       _buildHeader(),
                       const SizedBox(height: 24),
-                      if (isLoading)
-                        const Center(child: CircularProgressIndicator(color: Colors.purpleAccent))
-                      else if (leaders.isEmpty)
+                      if (leaders.isEmpty)
                         _emptyState()
                       else
                         _buildLeaderList(),

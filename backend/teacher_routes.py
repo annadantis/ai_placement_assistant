@@ -20,6 +20,11 @@ class TeacherLogin(BaseModel):
     username: str
     password: str
 
+class TeacherRegister(BaseModel):
+    username: str
+    password: str
+    secret_code: str
+
 
 @router.post("/login")
 async def teacher_login(credentials: TeacherLogin, db: Session = Depends(get_db)):
@@ -28,9 +33,13 @@ async def teacher_login(credentials: TeacherLogin, db: Session = Depends(get_db)
     Validates credentials and checks role = 'teacher'
     """
     
+    # Domain validation
+    if not credentials.username.strip().lower().endswith('@rajagiritech.edu.in'):
+        raise HTTPException(401, "Invalid domain. Only @rajagiritech.edu.in is allowed.")
+
     result = db.execute(
         text("SELECT username, role, branch FROM users WHERE username = :username AND password_hash = :password"),
-        {"username": credentials.username, "password": credentials.password}
+        {"username": credentials.username.strip(), "password": credentials.password}
     )
     
     user = result.fetchone()
@@ -48,6 +57,45 @@ async def teacher_login(credentials: TeacherLogin, db: Session = Depends(get_db)
         "branch": user[2],
         "message": "Teacher login successful"
     }
+
+
+@router.post("/register")
+async def teacher_register(credentials: TeacherRegister, db: Session = Depends(get_db)):
+    """
+    Teacher registration endpoint.
+    Requires @rajagiritech.edu.in email domain and secret access code.
+    """
+    username = credentials.username.strip().lower()
+    
+    if credentials.secret_code != 'Gemini':
+        raise HTTPException(403, "Invalid secret access code.")
+        
+    if not username.endswith('@rajagiritech.edu.in'):
+        raise HTTPException(403, "Invalid domain. Only @rajagiritech.edu.in is allowed for teachers.")
+
+    from models import User
+    
+    try:
+        existing = db.query(User).filter(User.username == username).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Teacher account already exists with this email")
+        
+        new_teacher = User(
+            username=username,
+            password_hash=credentials.password,
+            role='teacher',
+            branch='ALL' # Default or you can leave it blank/None
+        )
+        
+        db.add(new_teacher)
+        db.commit()
+        
+        return {"status": "success", "message": "Teacher registered successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/students")

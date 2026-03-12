@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:placement_assistant/widgets/loading_overlay.dart';
 import '../api_config.dart';
 import '../providers/auth_provider.dart';
 import 'result_page.dart';
@@ -249,10 +250,12 @@ class _GdScreenState extends State<GdScreen> with WidgetsBindingObserver {
       final String? audioPath = await _audioRecorder.stop();
 
       if (topic?["topic_id"] != null && audioPath != null) {
+        final auth = Provider.of<AuthProvider>(context, listen: false);
         final res = await ApiConfig.submitGD(
           topicId: topic!["topic_id"],
           audioFile: File(audioPath),
           videoFile: File(videoFile.path),
+          username: auth.username ?? "Anonymous",
         );
         if (!_isDisposed && mounted) {
           setState(() => result = res);
@@ -329,49 +332,69 @@ class _GdScreenState extends State<GdScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<bool> _onWillPop() async {
+    if (result != null || (!_recording && !_loading)) return true;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161625),
+        title: const Text("Exit GD Session?", style: TextStyle(color: Colors.white)),
+        content: const Text(
+          "⚠️ Your current session progress will NOT be saved. The result will not be recorded in your analytics.\n\nAre you sure you want to leave?",
+          style: TextStyle(color: Colors.white70, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Continue", style: TextStyle(color: Colors.cyanAccent)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Leave", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    return confirm ?? false;
+  }
+
   // ================= UI SECTION =================
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      backgroundColor: const Color(0xFF0F0C29),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new,
-              color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        backgroundColor: const Color(0xFF0F0C29),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new,
+                color: Colors.white, size: 20),
+            onPressed: () async {
+              if (await _onWillPop()) Navigator.pop(context);
+            },
+          ),
+          title: const Text("Group Discussion",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          centerTitle: true,
         ),
-        title: const Text("Group Discussion",
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: topic == null
-            ? const Center(
-                child: CircularProgressIndicator(color: Colors.cyanAccent))
-            : _loading
-                ? _buildLoadingView()
-                : _buildInterviewView(),
+        body: SafeArea(
+          child: topic == null
+              ? const Center(
+                  child: CircularProgressIndicator(color: Colors.cyanAccent))
+              : _loading
+                  ? _buildLoadingView()
+                  : _buildInterviewView(),
+        ),
       ),
     );
   }
 
   Widget _buildLoadingView() {
-    return const Center(
-        child: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        CircularProgressIndicator(color: Colors.cyanAccent),
-        SizedBox(height: 25),
-        Text("Analyzing Content & Behavior...",
-            style: TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-                fontWeight: FontWeight.w500))
-      ],
-    ));
+    return PremiumLoadingOverlay(message: "Processing Group Discussion Analytics...");
   }
 
   Widget _buildInterviewView() {

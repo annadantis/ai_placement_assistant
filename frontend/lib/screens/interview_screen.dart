@@ -8,6 +8,8 @@ import 'package:record/record.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:placement_assistant/widgets/loading_overlay.dart';
+import '../api_config.dart';
 import '../providers/auth_provider.dart';
 
 class InterviewScreen extends StatefulWidget {
@@ -94,10 +96,21 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
     }
   }
 
-  void _beginInterview() {
+  void _beginInterview() async {
     setState(() {
       _isTestStarted = true;
     });
+    
+    // Start session-wide video recording for behavioral analysis
+    if (_camera != null && _camera!.value.isInitialized) {
+      try {
+        await _camera!.startVideoRecording();
+        print("DEBUG: Session video recording started.");
+      } catch (e) {
+        print("DEBUG: Error starting video recording: $e");
+      }
+    }
+    
     _startQuestionTimer();
   }
 
@@ -177,17 +190,38 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
     });
     _frameTimer?.cancel();
     
+    XFile? videoFile;
+    if (_camera != null && _camera!.value.isRecordingVideo) {
+      try {
+        videoFile = await _camera!.stopVideoRecording();
+        print("DEBUG: Session video recording stopped: ${videoFile.path}");
+      } catch (e) {
+        print("DEBUG: Error stopping video recording: $e");
+      }
+    }
+
     final auth = Provider.of<AuthProvider>(context, listen: false);
-    // Request final report directly, no video needed!
+    // Request final report with the recorded video!
     var req = http.MultipartRequest('POST', Uri.parse('${auth.baseUrl}/final_session_report'));
     req.fields['username'] = auth.username!;
     
+    if (videoFile != null) {
+      req.files.add(await http.MultipartFile.fromPath('video', videoFile.path));
+      print("DEBUG: Attaching video file to final report.");
+    } else {
+      print("DEBUG: Video file is null, skipping attachment.");
+    }
+    
     var res = await req.send();
     var body = await http.Response.fromStream(res);
-    setState(() {
-      _result = jsonDecode(body.body);
-      _isLoading = false;
-    });
+    print("DEBUG: Final Report Status: ${res.statusCode}");
+    
+    if (mounted) {
+      setState(() {
+        _result = jsonDecode(body.body);
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -230,50 +264,70 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
     }
   }
 
+  Future<bool> _onWillPop() async {
+    if (_result != null || (!_isTestStarted && !_isLoading)) return true;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161625),
+        title: const Text("Exit Interview?", style: TextStyle(color: Colors.white)),
+        content: const Text(
+          "⚠️ Your current interview progress will NOT be saved. The result will not be recorded in your analytics.\n\nAre you sure you want to leave?",
+          style: TextStyle(color: Colors.white70, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Continue", style: TextStyle(color: Colors.cyanAccent)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Leave", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    return confirm ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+            onPressed: () async {
+              if (await _onWillPop()) Navigator.pop(context);
+            },
+          ),
+          title: const Text("AI Interview", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          centerTitle: true,
         ),
-        title: const Text("AI Interview", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        centerTitle: true,
-      ),
-      body: Container(
-        color: const Color(0xFF0F0C29), // Match main app Scaffold background
-        child: SafeArea(
-          child: _isLoading 
-            ? _buildLoadingView()
-            : _result != null ? _buildReportView() : _buildInterviewView(),
+        body: Container(
+          color: const Color(0xFF0F0C29), // Match main app Scaffold background
+          child: SafeArea(
+            child: _isLoading 
+              ? _buildLoadingView()
+              : _result != null ? _buildReportView() : _buildInterviewView(),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildLoadingView() {
-    return const Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          CircularProgressIndicator(color: Colors.cyanAccent),
-          SizedBox(height: 25),
-          Text(
-            "Analyzing Behavior & Technical Accuracy...", 
-            style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w500)
-          )
-        ],
-      )
-    );
+    return PremiumLoadingOverlay(message: "Analyzing and Generating the  Report...");
   }
 
   Widget _buildInterviewView() {
     if (_questions.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: Colors.cyanAccent));
+      return PremiumLoadingOverlay(message: "Preparing Your Interview Questions...");
     }
 
     final warningMsg = _getWarningMessage();
@@ -441,6 +495,29 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
                         ],
                       ),
                     ),
+                    
+                    const SizedBox(height: 10),
+                    
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        _timer?.cancel();
+                        _nextOrSubmit();
+                      },
+                      icon: Icon(
+                        _currentIndex < _questions.length - 1 ? Icons.skip_next : Icons.check_circle, 
+                        color: Colors.cyanAccent, 
+                        size: 20
+                      ),
+                      label: Text(
+                        _currentIndex < _questions.length - 1 ? "Next Question" : "Finish Interview", 
+                        style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: Colors.cyanAccent.withOpacity(0.5)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      ),
+                    ),
                   ],
                 )
               : Column(
@@ -486,77 +563,243 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
   }
 
   Widget _buildReportView() {
+    final scores = _result!['individual_scores'] ?? {};
+    final fillerCount = _result!['filler_words_count'] ?? 0;
+    
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildScoreCard("Content Score", "${_result!['content_score']}", Colors.cyanAccent),
-                const SizedBox(width: 15),
-                _buildScoreCard("Camera Score", "${_result!['camera_score']}", Colors.purpleAccent),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
+          // 1. Final Grade Glass Card
           Center(
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 30),
+              padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 40),
               decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [Colors.cyanAccent.withOpacity(0.1), Colors.purpleAccent.withOpacity(0.1)]),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white12)
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.cyanAccent.withOpacity(0.15),
+                    Colors.purpleAccent.withOpacity(0.15),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(32),
+                border: Border.all(color: Colors.white.withOpacity(0.1), width: 1.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  )
+                ],
               ),
               child: Column(
                 children: [
-                  const Text("Final Session Grade", style: TextStyle(color: Colors.white54, fontSize: 13)),
-                  const SizedBox(height: 5),
-                  Text("${_result!['final_score']}/10", style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.stars, color: Colors.amberAccent, size: 32),
+                  ),
+                  const SizedBox(height: 15),
+                  const Text("Final Session Performance", style: TextStyle(color: Colors.white70, fontSize: 14, letterSpacing: 1.2, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 8),
+                  Text("${_result!['final_score']}", style: const TextStyle(color: Colors.white, fontSize: 52, fontWeight: FontWeight.w900, letterSpacing: -1)),
                 ],
               ),
             ),
           ),
-          const SizedBox(height: 30),
-          
-          _buildFeedbackSection("Confidence & Demeanor", _result!['overall_confidence'], Icons.person),
-          const SizedBox(height: 20),
-          _buildFeedbackSection("Behavioral Feedback", _result!['behavioral_feedback'], Icons.remove_red_eye),
-          
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Divider(color: Colors.white24, height: 1),
+          const SizedBox(height: 40),
+
+          // 2. Metrics Grid
+          Row(
+            children: [
+              _buildMetricCard("TECHNICAL", "${scores['technical'] ?? 'N/A'}", Icons.code, Colors.cyanAccent),
+              const SizedBox(width: 12),
+              _buildMetricCard("COMMUNICATION", "${scores['voice'] ?? 'N/A'}", Icons.mic, Colors.purpleAccent),
+            ],
           ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _buildMetricCard("BEHAVIORAL", "${scores['camera'] ?? 'N/A'}", Icons.videocam, Colors.blueAccent),
+              const SizedBox(width: 12),
+              _buildMetricCard("FILLER WORDS", "$fillerCount", Icons.format_quote, Colors.orangeAccent),
+            ],
+          ),
+          const SizedBox(height: 12),
           
-          const Text("Detailed Breakdown", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-          
-          ...(_result!['technical_report'] as List).map((item) => Container(
-            margin: const EdgeInsets.only(bottom: 20),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(16)
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          // New: Session-wide behavioral metrics
+          if (_result!['session_metrics'] != null)
+            Row(
               children: [
-                Text("Q: ${item['question']}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15)),
-                const SizedBox(height: 12),
-                _buildResponseRow("Accuracy:", item['accuracy'] ?? "N/A", Colors.cyanAccent),
-                const SizedBox(height: 8),
-                _buildResponseRow("User Input:", item['user_input'] ?? item['your_answer'] ?? "N/A", Colors.white70),
-                const SizedBox(height: 8),
-                _buildResponseRow("Ideal Answer:", item['ideal_answer'] ?? "N/A", Colors.greenAccent.shade200),
-                const SizedBox(height: 8),
-                _buildResponseRow("Improved Answer:", item['improvement'] ?? "N/A", Colors.orangeAccent),
+                _buildMetricCard("EYE CONTACT", "${_result!['session_metrics']['eye_contact'] ?? '0'}%", Icons.visibility, Colors.tealAccent),
+                const SizedBox(width: 12),
+                _buildMetricCard("AVG SPEECH RATE", "${_result!['session_metrics']['avg_wpm'] ?? 0} WPM", Icons.speed, Colors.greenAccent),
               ],
             ),
-          )).toList(),
+          const SizedBox(height: 40),
+
+          // 3. Narrative Feedback
+          _buildPremiumFeedbackSection("Critical Confidence Analysis", _result!['overall_confidence'], Icons.insights, [Colors.cyanAccent, Colors.blueAccent]),
+          const SizedBox(height: 24),
+          _buildPremiumFeedbackSection("Behavioral & Speech Observations", _result!['behavioral_feedback'], Icons.psychology, [Colors.purpleAccent, Colors.deepPurpleAccent]),
+          
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 40),
+            child: Row(
+              children: [
+                Expanded(child: Divider(color: Colors.white10, thickness: 1.5)),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Text("QUESTION BREAKDOWN", style: TextStyle(color: Colors.white38, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 2)),
+                ),
+                Expanded(child: Divider(color: Colors.white10, thickness: 1.5)),
+              ],
+            ),
+          ),
+
+          // 4. Detailed Questions
+          ...(_result!['technical_report'] as List).map((item) {
+            final vStats = item['voice_stats'];
+            return Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.02),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(color: Colors.cyanAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+                        child: Text(item['accuracy'] ?? "0%", style: const TextStyle(color: Colors.cyanAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(item['question'] ?? "", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14, height: 1.3))),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  
+                  // Voice Stats for this question
+                  if (vStats != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.purpleAccent.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(15),
+                          border: Border.all(color: Colors.purpleAccent.withOpacity(0.1)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.record_voice_over, color: Colors.purpleAccent, size: 16),
+                            const SizedBox(width: 12),
+                            Text("${vStats['wpm']} WPM", style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 15),
+                            const Icon(Icons.format_quote, color: Colors.orangeAccent, size: 14),
+                            const SizedBox(width: 6),
+                            Text("${vStats['fillers']} fillers", style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                            const Spacer(),
+                            Text(vStats['feedback'], style: const TextStyle(color: Colors.white38, fontSize: 10, fontStyle: FontStyle.italic)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    
+                  _buildModernResponseBox("YOUR RESPONSE", item['user_input'] ?? item['your_answer'] ?? "N/A", Colors.white70),
+                  const SizedBox(height: 12),
+                  _buildModernResponseBox("IDEAL ANSWER", item['ideal_answer'] ?? "N/A", Colors.greenAccent.shade400),
+                  const SizedBox(height: 12),
+                  _buildModernResponseBox("IMPROVEMENTS", item['improvement'] ?? "N/A", Colors.orangeAccent),
+                ],
+              ),
+            );
+          }).toList(),
+          const SizedBox(height: 40),
         ],
       ),
+    );
+  }
+
+  Widget _buildMetricCard(String label, String value, IconData icon, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.12)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(height: 10),
+            Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            Text(label, style: const TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.8)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPremiumFeedbackSection(String title, String content, IconData icon, List<Color> colors) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.02),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ShaderMask(
+                shaderCallback: (bounds) => LinearGradient(colors: colors).createShader(bounds),
+                child: Icon(icon, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Text(title, style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 0.4)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(content, style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModernResponseBox(String label, String text, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(color: color.withOpacity(0.4), fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(text, style: TextStyle(color: color, fontSize: 13, height: 1.4, fontWeight: FontWeight.w500)),
+        ),
+      ],
     );
   }
 

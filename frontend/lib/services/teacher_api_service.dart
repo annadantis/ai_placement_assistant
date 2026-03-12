@@ -22,6 +22,25 @@ class TeacherApiService {
     }
   }
 
+  // Teacher Registration
+  static Future<Map<String, dynamic>> register(String username, String password, String secretCode) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/teacher/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+        'secret_code': secretCode,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    } else {
+      throw Exception('Registration failed: ${response.body}');
+    }
+  }
+
   // Get All Students
   static Future<Map<String, dynamic>> getStudents({String? branch, String? search}) async {
     String url = '$baseUrl/teacher/students';
