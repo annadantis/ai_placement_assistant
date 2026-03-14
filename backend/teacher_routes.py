@@ -297,7 +297,7 @@ async def get_student_progress(username: str, db: Session = Depends(get_db)):
 
     # Get recent Interview sessions from results table
     interview_history = db.execute(text("""
-        SELECT r.id, r.score, r.area, r.timestamp
+        SELECT r.id, r.score, r.area, r.timestamp, r.confidence
         FROM results r
         WHERE r.username = :username AND r.category = 'INTERVIEW'
         ORDER BY r.timestamp DESC
@@ -306,11 +306,19 @@ async def get_student_progress(username: str, db: Session = Depends(get_db)):
     
     interview_sessions = []
     for row in interview_history:
+        confidence_obj = {}
+        if row[4]:
+            try:
+                confidence_obj = json.loads(row[4])
+            except:
+                pass
+                
         interview_sessions.append({
             "id": row[0],
             "score": row[1],
             "topic": row[2],
-            "date": str(row[3])
+            "date": str(row[3]),
+            "confidence": confidence_obj.get("metrics", {}) if isinstance(confidence_obj, dict) else {}
         })
     
     return {

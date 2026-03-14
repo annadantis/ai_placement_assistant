@@ -5,16 +5,15 @@ import 'package:http/http.dart' as http;
 class ApiConfig {
   // Use 10.0.2.2 if using Android Emulator, or your local IP if testing on a physical device.
   // For Windows/Web, localhost works.
-  static const String baseUrl = "http://127.0.0.1:8000";
+  static const String baseUrl = "http://localhost:8000";
 
   // ---------------- INTERVIEW ENDPOINTS ----------------
 
-  static Future<Map<String, dynamic>> evaluateInterview(String filePath, {String username = "Anonymous"}) async {
+  static Future<Map<String, dynamic>> evaluateInterview(String filePath) async {
     var request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/evaluate_interview'),
     );
-    request.fields['username'] = username;
     request.files.add(await http.MultipartFile.fromPath('audio', filePath));
 
     var streamedResponse = await request.send();
@@ -27,6 +26,7 @@ class ApiConfig {
   /// Fetches a random GD topic from the MySQL database
   static Future<Map<String, dynamic>> fetchGDTopic() async {
     try {
+      // Ensure the path matches the one that worked in your browser!
       final response = await http.get(Uri.parse('$baseUrl/gd_module/gd/topic'));
 
       if (response.statusCode == 200) {
@@ -40,61 +40,52 @@ class ApiConfig {
     }
   }
 
-  /// Submits audio + video to GD evaluation backend
+  /// Submits audio + video to GD evaluation backend along with conversation history
+  /// Submits audio + video to GD evaluation backend along with conversation history
   static Future<Map<String, dynamic>> submitGD({
-    required String topicId,
+    required String topicId, 
     required List<File> audioFiles,
     required File videoFile,
-    required String botContext,
-    String username = "Anonymous",
+    required String botContext, 
   }) async {
     try {
+      // Ensure the endpoint matches your router prefix (e.g., /gd_module)
       final url = Uri.parse('$baseUrl/gd_module/submit');
+
       var request = http.MultipartRequest('POST', url);
 
+      // 1. Add fields (FastAPI Form data)
       request.fields['topic_id'] = topicId;
-      request.fields['username'] = username;
-      request.fields['bot_context'] = botContext;
+      request.fields['bot_context'] = botContext; // Crucial for Phase 2 Evaluation
 
-      // Add multiple audio files
+      // 2. Add the Audio (MultipartFile)
       for (var file in audioFiles) {
-        request.files.add(await http.MultipartFile.fromPath('audio', file.path));
+        request.files.add(await http.MultipartFile.fromPath(
+          'audio',
+          file.path,
+        ));
       }
-      
-      request.files.add(await http.MultipartFile.fromPath('video', videoFile.path));
 
+      // 3. Add the Video (MultipartFile)
+      request.files.add(await http.MultipartFile.fromPath(
+        'video',
+        videoFile.path,
+      ));
+
+      // Send the request
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
       } else {
-        print("Server Error: ${response.body}");
-        throw Exception("GD Evaluation failed: ${response.body}");
+        // Detailed error logging to help debug logic issues
+        print("GD Backend Error: ${response.statusCode} - ${response.body}");
+        throw Exception("GD Evaluation failed. Status: ${response.statusCode}");
       }
     } catch (e) {
-      print("Submit Error: $e");
-      throw Exception("Network error during submission");
-    }
-  }
-
-  /// Simulates a multi-bot GD for a given topic
-  static Future<Map<String, dynamic>> simulateGD(int topicId) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/gd_module/simulate'),
-        headers: {"Content-Type": "application/json"},
-        body: json.encode({"topic_id": topicId}),
-      );
-
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      } else {
-        throw Exception("Simulation failed: ${response.statusCode}");
-      }
-    } catch (e) {
-      print("Simulation Error: $e");
-      throw Exception("Failed to start GD simulation");
+      print("Submit Network Error: $e");
+      throw Exception("Failed to connect to the evaluation server.");
     }
   }
 
@@ -132,15 +123,12 @@ class ApiConfig {
   }
 
   /// Fetches an AI-generated 1-sentence summary for a specific news title
-  static Future<String> fetchNewsSummary(String title, {String? url}) async {
+  static Future<String> fetchNewsSummary(String title) async {
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/news/summary'),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "title": title,
-          "url": url,
-        }),
+        body: json.encode({"title": title}),
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -154,66 +142,44 @@ class ApiConfig {
     }
   }
 
-  /// Stops any ongoing news summary speech
-  static Future<void> stopSpeech() async {
-    try {
-      await http.post(Uri.parse('$baseUrl/news/stop-speech'));
-    } catch (e) {
-      print("Stop Speech Error: $e");
-    }
-  }
+  // ---------------- PERFORMANCE & ANALYTICS ----------------
 
-  static Future<List<dynamic>> fetchSuggestions(String username) async {
+  static Future<List<dynamic>> fetchUserHistory(String username) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/suggestions/$username'));
+      final response = await http.get(Uri.parse('$baseUrl/history/$username'));
       if (response.statusCode == 200) {
-        return json.decode(response.body)['suggestions'] ?? [];
-      } else {
-        throw Exception("Failed to load suggestions: ${response.statusCode}");
+        return json.decode(response.body);
       }
+      return [];
     } catch (e) {
-      print("Suggestions Fetch Error: $e");
+      print("History Fetch Error: $e");
       return [];
     }
   }
 
-  // ---------------- HISTORY & REPORTS ----------------
-
-  static Future<List<dynamic>> fetchUserHistory(String username) async {
-    final response = await http.get(Uri.parse('$baseUrl/history/$username'));
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    } else {
-      throw Exception("Failed to load history");
+  static Future<Map<String, dynamic>> fetchPerformanceByDate(String username, String date) async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/performance_by_date/$username/$date'));
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      throw Exception("Failed to fetch performance for $date");
+    } catch (e) {
+      print("Date Performance error: $e");
+      rethrow;
     }
   }
 
   static Future<Map<String, dynamic>> fetchSessionDetail(String category, int sessionId) async {
-    final response = await http.get(Uri.parse('$baseUrl/session_detail/$category/$sessionId'));
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    } else {
-      throw Exception("Failed to load session details");
-    }
-  }
-
-  static Future<Map<String, dynamic>> fetchPerformanceByDate(String username, String dateStr) async {
-    final response = await http.get(Uri.parse('$baseUrl/performance_by_date/$username/$dateStr'));
-    if (response.statusCode == 200) {
-      return json.decode(response.body);
-    } else {
-      throw Exception("Failed to load performance by date");
-    }
-  }
-
-  static Future<void> markSuggestionRead(int id) async {
     try {
-      final response = await http.post(Uri.parse('$baseUrl/suggestions/$id/read'));
-      if (response.statusCode != 200) {
-        print("Failed to mark suggestion read: ${response.body}");
+      final response = await http.get(Uri.parse('$baseUrl/session_detail/${category.toUpperCase()}/$sessionId'));
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
       }
+      throw Exception("Failed to load session details");
     } catch (e) {
-      print("Mark Suggestion Read Error: $e");
+      print("Session Detail error: $e");
+      rethrow;
     }
   }
 }

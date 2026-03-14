@@ -120,6 +120,18 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
                         const SizedBox(height: 15),
                         _buildQuizHistory(),
                         const SizedBox(height: 25),
+                        if ((_data!['gd_history'] as List).isNotEmpty) ...[
+                          _buildSectionHeader("GD Sessions"),
+                          const SizedBox(height: 15),
+                          _buildGDHistory(),
+                          const SizedBox(height: 25),
+                        ],
+                        if ((_data!['interview_history'] as List).isNotEmpty) ...[
+                          _buildSectionHeader("Interview Sessions"),
+                          const SizedBox(height: 15),
+                          _buildInterviewHistory(),
+                          const SizedBox(height: 25),
+                        ],
                         _buildSectionHeader("Feedback History"),
                         const SizedBox(height: 15),
                         _buildSuggestionHistory(),
@@ -373,7 +385,7 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
           children: [
             _buildMiniStat("STREAK", "${_data!['completion_last_7_days']}d", Icons.local_fire_department, Colors.orangeAccent),
             _buildMiniStat("ACCURACY", "${_calculateOverallAccuracy()}%", Icons.track_changes, Colors.blueAccent),
-            _buildMiniStat("SESSION", "${(_data!['quiz_history'] as List).length}", Icons.assignment_outlined, Colors.purpleAccent),
+            _buildMiniStat("SESSION", "${(_data!['quiz_history'] as List).length}", Icons.assignment_outlined, Colors.blueAccent),
           ],
         ),
       ),
@@ -553,6 +565,87 @@ class _StudentDetailScreenState extends State<StudentDetailScreen> {
   }
 
 
+
+  Widget _buildGDHistory() {
+    final history = _data!['gd_history'] as List;
+    if (history.isEmpty) return const Center(child: Text("No GD sessions", style: TextStyle(color: Colors.white24)));
+    return Column(
+      children: history.map((g) {
+        final double score = (g['score'] as num?)?.toDouble() ?? 0.0;
+        final double pct = score * 10;
+        final Color scoreColor = pct >= 70 ? const Color(0xFF24D876) : pct >= 40 ? Colors.orangeAccent : Colors.redAccent;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1D1E33),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.cyanAccent.withOpacity(0.08)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 45, height: 45,
+                decoration: BoxDecoration(color: scoreColor.withOpacity(0.1), shape: BoxShape.circle),
+                child: Center(child: Text(pct.toStringAsFixed(0), style: TextStyle(color: scoreColor, fontWeight: FontWeight.bold, fontSize: 13))),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("GD SESSION", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.cyanAccent)),
+                    Text(g['topic'] ?? "Group Discussion", style: const TextStyle(color: Colors.white54, fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              Text(_formatShortDate(g['date'] ?? ""), style: const TextStyle(color: Colors.white24, fontSize: 9)),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildInterviewHistory() {
+    final history = _data!['interview_history'] as List;
+    if (history.isEmpty) return const Center(child: Text("No interview sessions", style: TextStyle(color: Colors.white24)));
+    return Column(
+      children: history.map((iv) {
+        final double score = (iv['score'] as num?)?.toDouble() ?? 0.0;
+        final Color scoreColor = score >= 7 ? const Color(0xFF24D876) : score >= 4 ? Colors.orangeAccent : Colors.redAccent;
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1D1E33),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.purpleAccent.withOpacity(0.08)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 45, height: 45,
+                decoration: BoxDecoration(color: scoreColor.withOpacity(0.1), shape: BoxShape.circle),
+                child: Center(child: Text("${score.toStringAsFixed(1)}", style: TextStyle(color: scoreColor, fontWeight: FontWeight.bold, fontSize: 13))),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("INTERVIEW", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.purpleAccent)),
+                    Text(iv['topic'] ?? "Mock Interview", style: const TextStyle(color: Colors.white54, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              Text(_formatShortDate(iv['date'] ?? ""), style: const TextStyle(color: Colors.white24, fontSize: 9)),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
 
   Widget _buildReportSection(String title, String? content, IconData icon) {
     if (content == null || content.isEmpty) return const SizedBox.shrink();

@@ -58,7 +58,7 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         children: [
           // Background Glows
           Positioned(top: -100, right: -50, child: _blurGlow(Colors.indigo.withOpacity(0.2), 300)),
-          Positioned(bottom: 100, left: -50, child: _blurGlow(Colors.purple.withOpacity(0.15), 250)),
+          Positioned(bottom: 100, left: -50, child: _blurGlow(Colors.blue.withOpacity(0.15), 250)),
           
           CustomScrollView(
             slivers: [
@@ -138,10 +138,10 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: isMe ? Colors.purpleAccent.withOpacity(0.15) : Colors.white.withOpacity(0.05),
+            color: isMe ? Colors.blueAccent.withOpacity(0.15) : Colors.white.withOpacity(0.05),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isMe ? Colors.purpleAccent.withOpacity(0.5) : Colors.white.withOpacity(0.1),
+              color: isMe ? Colors.blueAccent.withOpacity(0.5) : Colors.white.withOpacity(0.1),
               width: isMe ? 2 : 1,
             ),
           ),

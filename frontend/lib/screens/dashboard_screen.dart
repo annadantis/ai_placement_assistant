@@ -28,6 +28,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  final ScrollController _dashboardScrollController = ScrollController();
   Map<String, dynamic>? data;
   Map<String, dynamic>? weeklyData;
   List<dynamic>? newsData;
@@ -58,6 +59,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _newsTimer?.cancel();
+    _dashboardScrollController.dispose();
     _newsOverlayEntry?.remove();
     _newsOverlayEntry = null;
     _suggestionOverlayEntry?.remove();
@@ -216,20 +218,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildDashboardSection(AuthProvider auth) {
     if (data == null) return const Center(child: CircularProgressIndicator());
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildTopSection(auth),
-          const SizedBox(height: 32),
-          _buildMiddleSection(context),
-          const SizedBox(height: 32),
-          const SizedBox(height: 32),
-          _buildFocusAreas(),
-          const SizedBox(height: 32),
-          _buildBottomSection(),
-        ],
+    return Scrollbar(
+      controller: _dashboardScrollController,
+      thumbVisibility: true,
+      trackVisibility: true,
+      child: SingleChildScrollView(
+        controller: _dashboardScrollController,
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildTopSection(auth),
+            const SizedBox(height: 32),
+            _buildMiddleSection(context),
+            const SizedBox(height: 32),
+            const SizedBox(height: 32),
+            _buildFocusAreas(),
+            const SizedBox(height: 32),
+            _buildBottomSection(),
+          ],
+        ),
       ),
     );
   }
@@ -257,6 +265,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 24),
           Expanded(
             child: ListView.builder(
+              primary: true,
               itemCount: _suggestions!.length,
               itemBuilder: (context, index) {
                 final s = _suggestions![index];
@@ -348,9 +357,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFF6366F1), Color(0xFFA855F7)]),
+        gradient: const LinearGradient(colors: [Color(0xFF2196F3), Color(0xFF1E88E5)]),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.purple.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10))],
+        boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -445,7 +454,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       case 'gold': return Colors.amber;
       case 'orange': return Colors.orangeAccent;
       case 'blue': return Colors.blueAccent;
-      case 'purple': return Colors.purpleAccent;
+      case 'purple': return Colors.blueAccent;
       default: return Colors.grey;
     }
   }
@@ -490,6 +499,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final tasks = data?['tasks'] ?? {};
     bool aptDone = tasks['aptitude_done'] ?? false;
     bool techDone = tasks['tech_done'] ?? false;
+    bool interviewDone = tasks['interview_done'] ?? false;
+    bool gdDone = tasks['gd_done'] ?? false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -501,6 +512,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _taskItem("Aptitude (10 questions)", aptDone, Colors.orangeAccent, () => _startQuiz(context, "APTITUDE")),
             const SizedBox(width: 20),
             _taskItem("Technical (10 questions)", techDone, Colors.blueAccent, () => _startQuiz(context, "TECHNICAL")),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            _taskItem("Mock Interview", interviewDone, Colors.purpleAccent, () {
+              Navigator.push(context, MaterialPageRoute(
+                builder: (context) => InstructionsScreen(
+                  category: "INTERVIEW",
+                  onStart: () {
+                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const InterviewScreen()));
+                  },
+                ),
+              ));
+            }),
+            const SizedBox(width: 20),
+            _taskItem("Group Discussion", gdDone, Colors.cyanAccent, () {
+              Navigator.push(context, MaterialPageRoute(
+                builder: (context) => InstructionsScreen(
+                  category: "GD",
+                  onStart: () {
+                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const GdScreen()));
+                  },
+                ),
+              ));
+            }),
           ],
         ),
       ],
@@ -566,7 +603,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
              decoration: BoxDecoration(color: const Color(0xFF161625), borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white10)),
              child: const Row(
                children: [
-                 Icon(Icons.insights, color: Colors.purpleAccent),
+                 Icon(Icons.insights, color: Colors.blueAccent),
                  SizedBox(width: 15),
                  Expanded(
                    child: Text(
@@ -671,7 +708,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onPressed: () {
                 Navigator.push(context, MaterialPageRoute(builder: (context) => PerformanceGraph()));
               },
-              child: const Text("View Full Analytics", style: TextStyle(color: Colors.purpleAccent)),
+              child: const Text("View Full Analytics", style: TextStyle(color: Colors.blueAccent)),
             )
           ],
         ),
@@ -728,7 +765,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ],
               ),
               IconButton(
-                icon: const Icon(Icons.refresh, color: Colors.purpleAccent),
+                icon: const Icon(Icons.refresh, color: Colors.blueAccent),
                 onPressed: () {
                   setState(() => newsData = null);
                   _loadNews();
@@ -741,7 +778,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: 20),
           Expanded(
             child: newsLoading
-                ? const Center(child: CircularProgressIndicator(color: Colors.purpleAccent))
+                ? const Center(child: CircularProgressIndicator(color: Colors.blueAccent))
                 : newsData == null || newsData!.isEmpty
                     ? const Center(child: Text("No trends found", style: TextStyle(color: Colors.white38)))
                     : ListView.builder(
@@ -765,26 +802,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.purpleAccent.withOpacity(0.2), Colors.indigo.withOpacity(0.2)],
+            colors: [Colors.blueAccent.withOpacity(0.2), Color(0xFF1E88E5).withOpacity(0.2)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: Colors.purpleAccent.withOpacity(0.5)),
+          border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
         ),
         child: Row(
           children: [
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.purpleAccent.withOpacity(0.2),
+                color: Colors.blueAccent.withOpacity(0.2),
                 shape: BoxShape.circle,
               ),
               child: briefingLoading 
-                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.purpleAccent, strokeWidth: 2))
+                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.blueAccent, strokeWidth: 2))
                 : Icon(
                     isPlayingBriefing ? Icons.stop_circle_outlined : Icons.multitrack_audio, 
-                    color: Colors.purpleAccent, 
+                    color: Colors.blueAccent, 
                     size: 24
                   ),
             ),
@@ -957,7 +994,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return const Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.auto_awesome, color: Colors.purpleAccent),
+        Icon(Icons.auto_awesome, color: Colors.blueAccent),
         SizedBox(width: 10),
         Text("AI Placement", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
       ],
@@ -989,7 +1026,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isSelected = _selectedIndex == index;
     return ListTile(
       onTap: isComingSoon ? null : (onTap ?? () => setState(() => _selectedIndex = index)),
-      leading: Icon(icon, color: isSelected ? Colors.purpleAccent : Colors.white54),
+      leading: Icon(icon, color: isSelected ? Colors.blueAccent : Colors.white54),
       title: Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.white54, fontSize: 14)),
       trailing: isComingSoon ? Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -1327,7 +1364,7 @@ class _SessionHistoryViewState extends State<_SessionHistoryView> {
 
   Color _getCategoryColor(String cat) {
     switch (cat.toUpperCase()) {
-      case 'INTERVIEW': return Colors.purpleAccent;
+      case 'INTERVIEW': return Colors.blueAccent;
       case 'APTITUDE': return Colors.cyanAccent;
       case 'TECHNICAL': return Colors.orangeAccent;
       case 'GD': return Colors.greenAccent;
@@ -1344,7 +1381,7 @@ class _SessionHistoryViewState extends State<_SessionHistoryView> {
         children: [
           Row(
             children: [
-              const Icon(Icons.history_edu_outlined, color: Colors.purpleAccent, size: 28),
+              const Icon(Icons.history_edu_outlined, color: Colors.blueAccent, size: 28),
               const SizedBox(width: 12),
               const Text("Session History", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
               const Spacer(),
@@ -1358,7 +1395,7 @@ class _SessionHistoryViewState extends State<_SessionHistoryView> {
           const Text("Tap any session to view your full report.", style: TextStyle(color: Colors.white38, fontSize: 13)),
           const SizedBox(height: 24),
           if (_loading)
-            const Center(child: CircularProgressIndicator(color: Colors.purpleAccent))
+            const Center(child: CircularProgressIndicator(color: Colors.blueAccent))
           else if (_sessions == null || _sessions!.isEmpty)
             Center(
               child: Column(
@@ -1378,6 +1415,7 @@ class _SessionHistoryViewState extends State<_SessionHistoryView> {
               child: RefreshIndicator(
                 onRefresh: _loadHistory,
                 child: ListView.builder(
+                  primary: true,
                   itemCount: _sessions!.length,
                   itemBuilder: (context, index) {
                     final s = _sessions![index];
@@ -1510,7 +1548,7 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                   const SizedBox(width: 8),
                   Text(
                     "${(double.tryParse(widget.session['score'].toString()) ?? 0.0).toStringAsFixed(1)} / 10",
-                    style: const TextStyle(color: Colors.purpleAccent, fontSize: 18, fontWeight: FontWeight.bold),
+                    style: const TextStyle(color: Colors.blueAccent, fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(width: 12),
                   IconButton(
@@ -1527,7 +1565,7 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
               const Divider(color: Colors.white10),
               const SizedBox(height: 12),
               if (_loading)
-                const Expanded(child: Center(child: CircularProgressIndicator(color: Colors.purpleAccent)))
+                const Expanded(child: Center(child: CircularProgressIndicator(color: Colors.blueAccent)))
               else if (_detail == null)
                 const Expanded(child: Center(child: Text("Could not load report.", style: TextStyle(color: Colors.white38))))
               else
@@ -1537,8 +1575,8 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.check, color: Colors.purpleAccent),
-                  label: const Text("Close", style: TextStyle(color: Colors.purpleAccent)),
+                  icon: const Icon(Icons.check, color: Colors.blueAccent),
+                  label: const Text("Close", style: TextStyle(color: Colors.blueAccent)),
                 ),
               ),
             ],
@@ -1564,14 +1602,14 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
             children: [
               _scoreChip("Technical", "${scores['tech'] ?? 'N/A'}", Colors.cyanAccent),
               const SizedBox(width: 10),
-              _scoreChip("Voice", "${scores['voice'] ?? 'N/A'}", Colors.purpleAccent),
+              _scoreChip("Voice", "${scores['voice'] ?? 'N/A'}", Colors.blueAccent),
               const SizedBox(width: 10),
               _scoreChip("Camera", "${scores['camera'] ?? 'N/A'}", Colors.blueAccent),
             ],
           ),
           if (behavioral['behavioral_feedback'] != null || behavioral['overall_confidence'] != null) ...[
             const SizedBox(height: 20),
-            _sectionBox("Behavioral Summary", behavioral['behavioral_feedback']?.toString() ?? behavioral['overall_confidence']?.toString() ?? "N/A", Colors.purpleAccent),
+            _sectionBox("Behavioral Summary", behavioral['behavioral_feedback']?.toString() ?? behavioral['overall_confidence']?.toString() ?? "N/A", Colors.blueAccent),
           ],
           const SizedBox(height: 20),
           const Text("QUESTION BREAKDOWN", style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
@@ -1609,7 +1647,7 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
         Row(children: [
           _scoreChip("Content", "${scores['content'] ?? 'N/A'}", Colors.greenAccent),
           const SizedBox(width: 10),
-          _scoreChip("Communication", "${scores['communication'] ?? 'N/A'}", Colors.purpleAccent),
+          _scoreChip("Communication", "${scores['communication'] ?? 'N/A'}", Colors.blueAccent),
           const SizedBox(width: 10),
           _scoreChip("Camera", "${scores['camera'] ?? 'N/A'}", Colors.blueAccent),
         ]),
@@ -1750,8 +1788,8 @@ class _TrendsSidePanelState extends State<_TrendsSidePanel>
           decoration: BoxDecoration(
             color: const Color(0xFF1E1B3A),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.purpleAccent.withOpacity(0.4)),
-            boxShadow: [BoxShadow(color: Colors.purple.withOpacity(0.3), blurRadius: 20, offset: const Offset(-4, 4))],
+            border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+            boxShadow: [BoxShadow(color: Colors.blue.withOpacity(0.3), blurRadius: 20, offset: const Offset(-4, 4))],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1759,7 +1797,7 @@ class _TrendsSidePanelState extends State<_TrendsSidePanel>
             children: [
               Row(
                 children: [
-                  const Icon(Icons.trending_up, color: Colors.purpleAccent, size: 18),
+                  const Icon(Icons.trending_up, color: Colors.blueAccent, size: 18),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text("Industry Trends",
@@ -1792,7 +1830,7 @@ class _TrendsSidePanelState extends State<_TrendsSidePanel>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Container(width: 4, height: 4, margin: const EdgeInsets.fromLTRB(0, 6, 8, 0),
-                            decoration: const BoxDecoration(color: Colors.purpleAccent, shape: BoxShape.circle)),
+                            decoration: const BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle)),
                         Expanded(child: Text(item['title'] ?? '', maxLines: 2, overflow: TextOverflow.ellipsis,
                             style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4))),
                       ],
@@ -1819,7 +1857,7 @@ void showNewsSummaryDialog(BuildContext context, dynamic item) {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Text(item['title'] ?? 'News Summary', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           content: snapshot.connectionState == ConnectionState.waiting
-              ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Colors.purpleAccent)))
+              ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Colors.blueAccent)))
               : Text(
                   snapshot.data ?? "Failed to load summary.",
                   style: const TextStyle(color: Colors.white70, height: 1.5, fontSize: 14),
@@ -1830,7 +1868,7 @@ void showNewsSummaryDialog(BuildContext context, dynamic item) {
                 ApiConfig.stopSpeech();
                 Navigator.pop(context);
               },
-              child: const Text("Close", style: TextStyle(color: Colors.purpleAccent)),
+              child: const Text("Close", style: TextStyle(color: Colors.blueAccent)),
             ),
             if (item['url'] != null)
               TextButton(

@@ -40,7 +40,7 @@ class _QuizScreenState extends State<QuizScreen> {
   // Theme Colors
   final Color scaffoldBg = const Color(0xFF0F0C29);
   final Color cardBg = const Color(0xFF161625);
-  final Color accentColor = const Color(0xFF6C63FF);
+  final Color accentColor = const Color(0xFF2196F3);
 
   @override
   void initState() {
@@ -309,7 +309,7 @@ class _QuizScreenState extends State<QuizScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text("Continue Quiz", style: TextStyle(color: Colors.purpleAccent)),
+            child: const Text("Continue Quiz", style: TextStyle(color: Colors.blueAccent)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -363,17 +363,17 @@ class _QuizScreenState extends State<QuizScreen> {
             decoration: BoxDecoration(
               color: _timeLeft < 60
                   ? Colors.red.withOpacity(0.2)
-                  : Colors.purple.withOpacity(0.1),
+                  : Colors.blue.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: _timeLeft < 60 ? Colors.redAccent : Colors.purpleAccent.withOpacity(0.3),
+                color: _timeLeft < 60 ? Colors.redAccent : Colors.blueAccent.withOpacity(0.3),
               ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.timer_outlined,
-                    color: _timeLeft < 60 ? Colors.redAccent : Colors.purpleAccent,
+                    color: _timeLeft < 60 ? Colors.redAccent : Colors.blueAccent,
                     size: 18),
                 const SizedBox(width: 6),
                 Text(
@@ -691,7 +691,7 @@ class _QuizScreenState extends State<QuizScreen> {
                         SizedBox(
                           width: 40,
                           height: 40,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6C63FF)),
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF2196F3)),
                         ),
                         SizedBox(height: 10),
                         Text("🤖 AI is generating explanation...", style: TextStyle(color: Colors.white70, fontStyle: FontStyle.italic)),

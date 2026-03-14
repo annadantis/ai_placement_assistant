@@ -70,7 +70,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
         return Theme(
           data: ThemeData.dark().copyWith(
             colorScheme: const ColorScheme.dark(
-              primary: Colors.purpleAccent,
+              primary: Colors.blueAccent,
               onPrimary: Colors.white,
               surface: Color(0xFF161625),
               onSurface: Colors.white,
@@ -115,7 +115,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
         children: [
           Text(
             title,
-            style: const TextStyle(color: Colors.purpleAccent, fontSize: 18, fontWeight: FontWeight.bold),
+            style: const TextStyle(color: Colors.blueAccent, fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const Divider(color: Colors.white10, height: 30),
           ...children,
@@ -164,13 +164,13 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.purpleAccent.withOpacity(0.1),
+                    color: Colors.blueAccent.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.purpleAccent.withOpacity(0.5)),
+                    border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
                   ),
                   child: Text(
                     "${res['score']}/${res['total_questions']}",
-                    style: const TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold),
+                    style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -355,7 +355,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.calendar_today, color: Colors.purpleAccent, size: 18),
+                        const Icon(Icons.calendar_today, color: Colors.blueAccent, size: 18),
                         const SizedBox(width: 10),
                         Text(
                           DateFormat('MMM dd, yyyy').format(selectedDate),
@@ -374,7 +374,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
             // Content
             Expanded(
               child: isLoading
-                  ? const Center(child: CircularProgressIndicator(color: Colors.purpleAccent))
+                  ? const Center(child: CircularProgressIndicator(color: Colors.blueAccent))
                   : errorMessage.isNotEmpty
                       ? _buildEmptyState(errorMessage)
                       : reportData == null

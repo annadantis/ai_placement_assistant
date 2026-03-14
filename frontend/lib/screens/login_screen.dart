@@ -28,7 +28,7 @@ class _LoginScreenState extends State<LoginScreen> {
     // Deep dark theme colors from your figure
     const Color scaffoldBg = Color(0xFF0F0C29);
     
-    const Color accentColor = Color(0xFF6C63FF);
+    const Color accentColor = Color(0xFF2196F3); // Premium Blue Accent
 
     return Scaffold(
       backgroundColor: scaffoldBg,
@@ -207,7 +207,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     Center(
                       child: TextButton(
                         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ForgotPasswordScreen())),
-                        child: const Text("Forgot Password?", style: TextStyle(color: Colors.redAccent)),
+                        child: const Text("Forgot Password?", style: TextStyle(color: Colors.white70)),
                       ),
                     ),
 

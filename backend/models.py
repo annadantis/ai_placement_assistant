@@ -110,6 +110,7 @@ class GDResult(Base):
     strategy_note = Column(Text)
     feedback = Column(Text)
     ideal_answer = Column(Text)
+    result_id = Column(Integer)  # Link to results.id
     timestamp = Column(TIMESTAMP, server_default=func.now())
 
 

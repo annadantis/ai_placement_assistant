@@ -3,9 +3,13 @@ import re
 import ollama
 import librosa
 import numpy as np
+import os
+
+# Import your CameraEvaluator from camera_eval.py
+from camera_eval import analyze_camera
 
 # ---------------------------
-# SILENCE DETECTION
+# SILENCE & UTILITY
 # ---------------------------
 
 def is_silent_audio(audio_path: str) -> bool:
@@ -14,261 +18,177 @@ def is_silent_audio(audio_path: str) -> bool:
         y, sr = librosa.load(audio_path, sr=None)
         intervals = librosa.effects.split(y, top_db=25)
         speech_time = sum((end - start) / sr for start, end in intervals)
-        return speech_time < 1.0  # less than 1 sec speech = silent
+        return speech_time < 1.0
     except Exception as e:
         print(f"Error analyzing audio: {e}")
         return True
 
-
 def is_silent_transcript(transcript: str) -> bool:
-    """Check if transcript contains meaningful content"""
-    if not transcript:
-        return True
+    if not transcript: return True
     words = transcript.strip().split()
     return len(words) < 3
 
-
 # ---------------------------
-# OLLAMA RUNNER
+# OLLAMA RUNNER & JSON
 # ---------------------------
 
 def run_ollama(prompt: str) -> str:
-    """
-    Call Ollama API with the given prompt.
-    Returns the model's response.
-    """
     try:
-        response = ollama.generate(
-            model='llama3',
-            prompt=prompt
-        )
+        # Using format='json' for Llama3 reliability
+        response = ollama.generate(model='llama3', prompt=prompt, format='json')
         return response['response'].strip()
     except Exception as e:
         print(f"Error calling Ollama: {e}")
         raise
 
-
-# ---------------------------
-# JSON EXTRACTION (ROBUST)
-# ---------------------------
-
 def extract_json(text: str) -> dict:
-    """
-    Extracts the FIRST valid JSON object from model output.
-    Handles extra whitespace, newlines, or text.
-    """
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
-        raise ValueError(f"No JSON found in response.\nRaw output:\n{text}")
-
+        raise ValueError("No JSON found in model response.")
     try:
         return json.loads(match.group())
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in response.\nRaw output:\n{text}") from e
-
+    except json.JSONDecodeError:
+        fixed = match.group().replace("'", '"')
+        return json.loads(fixed)
 
 # ---------------------------
 # MAIN EVALUATION FUNCTION
 # ---------------------------
 
-def evaluate_gd(topic: str, transcript: str, audio_path: str, camera_score: float = 0.0, target_keywords: list = None) -> dict:
+def evaluate_gd(topic: str, transcript: str, audio_path: str, video_path: str,
+                target_keywords: list = None, bot_context: str = "") -> dict:
     """
-    Central GD evaluation logic using Ollama with Keyword Audit and Weighted Overall Score.
+    Full-spectrum GD Evaluation:
+    1. Visual: Eye contact, Visibility, Smiles (via camera_eval.py)
+    2. Audio: WPM, Fillers, Silence (via librosa)
+    3. Contextual: Interaction with bots and Keyword coverage (via Llama3)
     """
-    if target_keywords is None:
-        target_keywords = []
+    if target_keywords is None: target_keywords = []
 
-    # ---------------------------
-    # HARD FAIL: SILENCE
-    # ---------------------------
-    if is_silent_audio(audio_path) or is_silent_transcript(transcript):
+    # --- 1. CAMERA ANALYSIS ---
+    camera_results = analyze_camera(video_path)
+    camera_score = camera_results.get("camera_score", 0.0)
+    camera_feedback = camera_results.get("camera_feedback", "")
+    camera_metrics = camera_results.get("metrics", {})
+
+    # --- 2. HARD FAIL CHECK (Silence or No Face) ---
+    if is_silent_audio(audio_path) or is_silent_transcript(transcript) or camera_score < 1.0:
         return {
             "overall_score": 0,
-            "transcript": transcript or "",
             "content_score": 0,
             "communication_score": 0,
             "voice_score": 0,
             "camera_score": camera_score,
-            "feedback": "No meaningful speech detected. Please speak clearly.",
-            "improved_answer": "",
-            "ideal_answer": "",
-            "strategy_note": ""
+            "feedback": f"Evaluation Failed: {camera_feedback if camera_score < 1.0 else 'No speech detected.'}",
+            "improved_answer": "N/A",
+            "ideal_answer": f"Ensure you are visible and speaking on: {topic}",
+            "strategy_note": "Position yourself in a quiet, well-lit environment.",
+            "found_keywords": [],
+            "missing_keywords": target_keywords,
+            "content_audit": {"error": "Invalid input data"},
+            "camera_metrics": camera_metrics
         }
 
-    # ---------------------------
-    # CALCULATE VOICE METRICS
-    # ---------------------------
+    # --- 3. VOICE ANALYSIS (Audio Metrics) ---
     try:
         y, sr = librosa.load(audio_path, sr=None)
         duration = librosa.get_duration(y=y, sr=sr)
+        word_count = len(transcript.split())
         wpm = (word_count / duration) * 60 if duration > 0 else 0
-        
+        wpm_score = max(0, 10 - (abs(150 - wpm) / 10)) # Target 150 WPM
+       
         intervals = librosa.effects.split(y, top_db=30)
         speech_time = sum((end - start) / sr for start, end in intervals)
-        silence_pct = ((duration - speech_time) / duration) * 100 if duration > 0 else 0
-        
-        # WPM scoring: 120-160 is ideal (score 10). Deduct 1 point per 10 WPM deviation outside this range.
-        if 120 <= wpm <= 160:
-            wpm_score = 10.0
-        elif wpm < 120:
-            wpm_score = max(0.0, 10.0 - ((120 - wpm) / 10))
-        else:
-            wpm_score = max(0.0, 10.0 - ((wpm - 160) / 10))
-            
-        # Silence scoring: 10-25% is ideal. Deduct 1 point per 5% deviation outside this range.
-        if 10.0 <= silence_pct <= 25.0:
-            silence_score = 10.0
-        elif silence_pct < 10.0:
-            silence_score = max(0.0, 10.0 - ((10.0 - silence_pct) / 5))
-        else:
-            silence_score = max(0.0, 10.0 - ((silence_pct - 25.0) / 5))
-        
-        fillers = [
-            r'\bum\b', r'\buh\b', r'\berr\b', r'\bhmm\b', r'\blike\b', 
-            r'\bactually\b', r'\bbasically\b', r'\byou know\b', r'\bi mean\b', r'\bso\b',
-            r'\bright\b', r'\bwell\b', r'\bokay\b', r'\bouknow\b', r'\bkind of\b', r'\bsort of\b',
-            r'\byou see\b', r'\banyway\b', r'\banyhow\b'
-        ]
+        silence_pct = ((duration - speech_time) / duration) * 100
+        silence_score = 10 if 10 <= silence_pct <= 20 else max(0, 10 - abs(15 - silence_pct) / 2)
+       
+        fillers = [r'\bum\b', r'\buh\b', r'\blike\b', r'\bactually\b', r'\bbasically\b', r'\byou know\b']
         filler_count = sum(len(re.findall(f, transcript.lower())) for f in fillers)
-        
-        # Filler scoring: 0-1 fillers = 10. Deduct 0.5 point per filler after 1, maximum deduction 5 points.
-        if filler_count <= 1:
-            filler_score = 10.0
-        else:
-            penalty = min((filler_count - 1) * 0.5, 5.0)
-            filler_score = 10.0 - penalty
+        filler_score = max(0, 10 - (filler_count * 1.5))
 
-        final_voice_score = round(float((wpm_score * 0.45) + (silence_score * 0.35) + (filler_score * 0.20)), 1)
+        final_voice_score = round(float((wpm_score * 0.4) + (silence_score * 0.3) + (filler_score * 0.3)), 1)
     except:
-        final_voice_score = 0
-        wpm, silence_pct, filler_count = 0, 0, 0
+        final_voice_score, wpm, filler_count = 5.0, 0, 0
 
-    # ---------------------------
-    # KEYWORD AUDIT (Ground Truth)
-    # ---------------------------
+    # --- 4. KEYWORD & INTERACTION CHECK ---
     found_keywords = [k for k in target_keywords if k.lower() in transcript.lower()]
     missing_keywords = [k for k in target_keywords if k.lower() not in transcript.lower()]
-    keyword_coverage = (len(found_keywords) / len(target_keywords) * 100) if target_keywords else 0
+   
+    # Bonus for acknowledging bots (Aravind/George/Sneha)
+    interaction_bonus = 0.0
+    if re.search(r"(aravind|george|sneha|mentioned|point|agree|disagree|building|however)", transcript.lower()):
+        interaction_bonus = 1.5
 
-    # ---------------------------
-    # OLLAMA PROMPT
-    # ---------------------------
+    # --- 5. OLLAMA ANALYSIS (Interaction & Behavioral) ---
     prompt = f"""
-You are a Senior Corporate HR Evaluator and Communication Coach. Your goal is to provide a strict, data-driven assessment and actionable model answers.
+    You are a Senior Corporate HR Evaluator. Provide a strict analysis of this GD performance.
+   
+    TOPIC: "{topic}"
+    BOT CONTEXT: "{bot_context}"
+    USER TRANSCRIPT: "{transcript}"
 
-TOPIC: "{topic}"
-USER TRANSCRIPT: "{transcript}"
+    TECHNICAL METRICS:
+    - Eye Contact: {camera_metrics.get('eye_contact', 0)}%
+    - Voice Score: {final_voice_score}/10
+    - Keywords Found: {found_keywords}
 
---- SYSTEM DATA (FACTS) ---
-1. VOICE ANALYSIS:
-   - Math Voice Score: {final_voice_score}/10
-   - Speed: {wpm:.1f} WPM
-   - Silence: {silence_pct:.1f}%
-   - Fillers: {filler_count}
+    EVALUATION TASKS:
+    1. CONTENT: Logic, relevance, and use of technical keywords.
+    2. COMMUNICATION: Did they respond to the bots effectively?
+    3. BEHAVIORAL: Incorporate the eye contact/posture data into your feedback.
 
-2. KEYWORD AUDIT:
-   - Required Industry Terms: {target_keywords}
-   - Terms Actually Used: {found_keywords}
-   - Keyword Coverage: {keyword_coverage:.1f}%
-
---- STRICT SCORING RULES ---
-- RELEVANCE HARD-STOP: If transcript is unrelated to TOPIC, 'content_score' MUST be ≤ 2.
-- DEPTH PENALTY: If Keyword Coverage is < 40%, 'depth' cannot exceed 5. 
-- COMMUNICATION SCORE: Baseline is Mathematical Voice Score ({final_voice_score}).
-- BE STRICT: Scores of 8+ are for industry-ready performances.
-
---- GENERATION TASKS ---
-1. IMPROVED_ANSWER: Rewrite the USER TRANSCRIPT to be professional. 
-   - Keep the user's original ideas but remove all {filler_count} fillers.
-   - Fix grammar and enhance the vocabulary slightly. 
-   - This should sound like a "better version" of the user.
-
-2. IDEAL_ANSWER: Provide a 10/10 Master Response for the topic "{topic}".
-   - Use a structured approach: Introduction -> Argument with {target_keywords} -> Conclusion.
-   - Use high-level industry logic and data-driven points.
-
-RETURN ONLY VALID JSON:
-{{
-  "content_score": <int 0-10>,
-  "communication_score": <int 0-10>,
-  "content_audit": {{
-      "relevance": <0-10>,
-      "depth": <0-10>,
-      "structure": <0-10>,
-      "vocabulary_precision": <0-10>
-  }},
-  "feedback": "<blunt, professional critique>",
-  "improved_answer": "<the user's points, polished and professional>",
-  "ideal_answer": "<the 150-word expert-level model response>",
-  "strategy_note": "<one sentence explaining why the Ideal Answer is superior to the Improved one>"
-}}
-"""
+    MANDATORY JSON OUTPUT:
+    {{
+      "content_score": <0-10>,
+      "communication_score": <0-10>,
+      "content_audit": {{ "relevance": <0-10>, "depth": <0-10>, "structure": <0-10>, "vocabulary": <0-10> }},
+      "feedback": "Be blunt and professional. Mention both speech content and eye contact behavior.",
+      "improved_answer": "Professional rewrite using {target_keywords}.",
+      "ideal_answer": "150-word master response.",
+      "strategy_note": "One sentence on handling the transition from bot to user."
+    }}
+    """
 
     try:
         raw_output = run_ollama(prompt)
         result = extract_json(raw_output)
     except Exception as e:
-        return {
-            "error": str(e),
-            "transcript": transcript,
-            "overall_score": 0,
-            "content_score": 0,
-            "communication_score": 0,
-            "voice_score": 0,
-            "camera_score": camera_score,
-            "feedback": f"Evaluation error: {str(e)}",
-            "improved_answer": "",
-            "ideal_answer": "",
-            "strategy_note": ""
-        }
+        return {"error": "AI Processing Failed", "details": str(e)}
 
-    # Normalize and Apply Word Count/Relevance Penalty
-    c_score = int(max(0, min(10, result.get("content_score", 0))))
-    comm_score = int(max(0, min(10, result.get("communication_score", 0))))
-    relevance_audit = result.get("content_audit", {}).get("relevance", 10)
+    # --- 6. FINAL SCORING & COMPILATION ---
+    c_score = float(result.get("content_score", 0))
+    # Blend: 60% LLM communication score + 40% voice quality (WPM, silence, fillers)
+    comm_score = min(10.0, float(result.get("communication_score", 0)) * 0.6 + final_voice_score * 0.4 + interaction_bonus)
 
-    # 1. Short Transcript Penalty
-    if len(transcript.split()) < 15:
-        c_score = min(c_score, 4)
-        comm_score = min(comm_score, 4)
-        result["feedback"] = "Critically short. " + result.get("feedback", "")
-
-    # 2. Relevance Hard-Stop (Programmatic Safety)
-    # If AI flags low relevance OR 0 keywords used on weak content
-    if relevance_audit <= 3 or (keyword_coverage == 0 and c_score > 3):
-        c_score = min(c_score, 2)
-        if relevance_audit <= 2: result["feedback"] = "Topic Mismatch: " + result.get("feedback", "")
-
-    # ---------------------------
-    # OVERALL SCORE CALCULATION
-    # ---------------------------
-    # Logic: 45% Content, 30% Communication, 25% Camera
+    # Weighted Score: 45% Content, 30% Communication (incl. Voice), 25% Camera
     overall_score = round(float((c_score * 0.45) + (comm_score * 0.30) + (camera_score * 0.25)), 1)
 
-    # Add calculated stats to final result
+    # Final mapping
     result.update({
         "overall_score": overall_score,
-        "transcript": transcript,
+        "content_score": c_score,
+        "communication_score": comm_score,
         "voice_score": final_voice_score,
         "camera_score": camera_score,
-        "keyword_coverage": f"{keyword_coverage:.1f}%",
+        "camera_feedback": camera_feedback,
+        "camera_metrics": camera_metrics,
         "found_keywords": found_keywords,
-        "missing_keywords": missing_keywords
+        "missing_keywords": missing_keywords,
+        "transcript": transcript,
+        "wpm": round(wpm, 1),
+        "filler_count": filler_count
     })
 
     return result
 
+# ---------------------------
+# TEST BLOCK
+# ---------------------------
 if __name__ == "__main__":
-    test_topic = "Should artificial intelligence replace human decision-making?"
-    # Industry keywords for this topic
-    keywords = ["Ethical frameworks", "Algorithmic bias", "Accountability", "Human-in-the-loop", "Efficiency"]
-    
-    test_transcript = "AI is fast and efficient, but we need accountability. Algorithmic bias is a big risk if we don't have a human-in-the-loop."
-    test_audio = "test.wav" 
-    
-    print("Evaluating with Keyword Audit...")
-    report = evaluate_gd(test_topic, test_transcript, test_audio, target_keywords=keywords)
-    print(json.dumps(report, indent=2))
+    # Ensure test files exist before running this
+    print("Executing full GD evaluation test...")
+    # Example call:
+    # report = evaluate_gd(topic="AI Ethics", transcript="...", audio_path="a.wav", video_path="v.mp4")
 
 
 

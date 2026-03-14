@@ -75,15 +75,17 @@ class _InstructionsScreenState extends State<InstructionsScreen>
           title: 'Group Discussion',
           icon: Icons.groups_outlined,
           color: Colors.cyanAccent,
-          description: 'Simulate a real group discussion. You will be given a topic and must speak your argument clearly.',
+          description: 'A collaborative AI-moderated discussion on a trending topic.',
           rules: [
-            'A random topic will be assigned.',
-            'You have 15 seconds to speak your argument.',
-            'Your audio and video are recorded and evaluated by AI.',
-            'Scoring is based on content and communication clarity.',
+            'Raise your hand (pan tool icon) to request time to speak.',
+            'You must speak your answer clearly',
+            'Maintain eye contact with the camera for a better score.',
+            'Your voice and camera are recorded for comprehensive evaluation.',
             'Ensure you are in a well-lit, quiet environment.',
-            'Do not switch screens during the session.',
+            'Your audio is transcribed and evaluated by AI.',
+            'Scoring is based on content accuracy and camera input.',
             'Leaving the session mid-way will discard your result.',
+
           ],
         );
       case 'INTERVIEW':

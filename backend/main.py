@@ -150,6 +150,65 @@ def replenish_interview_questions(db: Session, branch: str = "COMMON", needed: i
         print(f"❌ [Background] Failed to replenish interview questions for {branch}: {e}")
         db.rollback()
 
+def check_week_gate(username: str, db: Session):
+    """
+    Check if the user is 'locked' from progressing due to missing requirements.
+    Gate: Must finish previous days before today's quiz is available if they've missed more than 2 days?
+    Or simply returns the status.
+    """
+    try:
+        today = get_ist_date()
+        monday = today - timedelta(days=today.weekday())
+        
+        # Count dual completions (Apt + Tech) this week
+        dual_completion_res = db.execute(
+            text("""
+                SELECT COUNT(*) FROM (
+                    SELECT DATE(timestamp) as d
+                    FROM results 
+                    WHERE username = :u 
+                    AND category IN ('APTITUDE', 'TECHNICAL')
+                    AND timestamp >= :monday
+                    GROUP BY DATE(timestamp)
+                    HAVING COUNT(DISTINCT category) = 2
+                ) as t
+            """),
+            {"u": username, "monday": monday}
+        ).fetchone()
+        
+        days_done = dual_completion_res[0] or 0
+        
+        # Check GD and Interview this week
+        activity_counts = db.execute(
+            text("""
+                SELECT category, COUNT(*) as count
+                FROM results 
+                WHERE username = :u 
+                AND timestamp >= :monday
+                AND category IN ('GD', 'INTERVIEW')
+                GROUP BY category
+            """),
+            {"u": username, "monday": monday}
+        ).fetchall()
+        
+        stats = {row[0].upper(): row[1] for row in activity_counts}
+        gd_done = stats.get('GD', 0) >= 1
+        int_done = stats.get('INTERVIEW', 0) >= 1
+        
+        total_required_days = today.weekday() # How many days should have been done by now
+        is_locked = (days_done < total_required_days - 1) # Example: allow 1 day grace
+        
+        return {
+            "days_done": days_done,
+            "gd_done": gd_done,
+            "interview_done": int_done,
+            "is_locked": is_locked,
+            "required_quizzes": total_required_days
+        }
+    except Exception as e:
+        print(f"Error in check_week_gate: {e}")
+        return {"is_locked": False}
+
 def process_weekly_level_up(username: str, db: Session):
     """
     Fluid Level-Up Logic
@@ -1222,6 +1281,9 @@ async def get_daily_quiz(
         
         is_catchup = target_date < today
         
+        # ── Gate Check ─────────────────────────────────────────────────
+        gate_status = check_week_gate(request.username, db)
+        
         return {
             "status": "success",
             "date": str(target_date),
@@ -1229,7 +1291,8 @@ async def get_daily_quiz(
             "catchup_for": str(target_date) if is_catchup else None,
             "difficulty": get_user_level(db, request.username, request.category),
             "questions": questions,
-            "total": len(questions)
+            "total": len(questions),
+            "week_gate": gate_status
         }
         
     except HTTPException:
@@ -1585,7 +1648,8 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
             "readiness_score": round(readiness_score, 1),
             "badges": badges,
             "streak": streak,
-            "branch_rank": branch_rank
+            "branch_rank": branch_rank,
+            "week_gate": check_week_gate(username.strip(), db)
         }
     except Exception as e:
         print(f"Error in weekly_report: {e}")
@@ -1627,47 +1691,65 @@ async def get_daily_report(username: str, date_str: Optional[str] = None, db: Se
         for row in results_query:
             cat = row[1].upper()
             if cat in report:
-                report[cat].append({
-                    "id": row[0],
-                    "score": float(row[2]) if row[2] else 0.0,
-                    "total_questions": int(row[3]) if row[3] else 0,
-                    "area": row[4] or "",
-                    "timestamp": str(row[5]),
-                    "confidence": row[6] or ""
-                })
+                confidence_obj = {}
+                if row[6]:
+                    try:
+                        confidence_obj = json.loads(row[6])
+                    except:
+                        pass
+                
+                # Special handling for GD to match frontend EXPECTATIONS in DailyReportScreen
+                if cat == "GD":
+                    gd_extra = db.execute(text("SELECT final_score, content_score, communication_score, topic_id FROM gd_results WHERE `result_id` = :rid"), {"rid": row[0]}).fetchone()
+                    
+                    report[cat].append({
+                        "id": row[0],
+                        "score": float(row[2]) if row[2] else 0.0,
+                        "final_score": float(gd_extra[0]) if gd_extra else (float(row[2]) * 10), # fallback
+                        "content_score": float(gd_extra[1]) if gd_extra else 0.0,
+                        "communication_score": float(gd_extra[2]) if gd_extra else 0.0,
+                        "topic_id": str(gd_extra[3]) if gd_extra else "",
+                        "area": row[4] or "Group Discussion",
+                        "timestamp": str(row[5])
+                    })
+                else:
+                    report[cat].append({
+                        "id": row[0],
+                        "score": float(row[2]) if row[2] else 0.0,
+                        "total_questions": int(row[3]) if row[3] else 0,
+                        "area": row[4] or "",
+                        "timestamp": str(row[5]),
+                        "confidence_metrics": confidence_obj.get("metrics", {}) if isinstance(confidence_obj, dict) else {},
+                        "feedback": confidence_obj.get("feedback", "") if isinstance(confidence_obj, dict) else ""
+                    })
 
-        # 2. Fetch GD results. We need to match username. 
-        # Note: gd_results only stores user_answer, topic_id etc.
-        # But looking at main.py, wait, gd_results might not have username easily accessible if submit_gd didn't store it.
-        # Let me just check if gd_results has a username column. If not, we might not be able to fetch it historically without altering table.
-        # Assuming the new submit_gd will store username, or if we join with something?
-        # Actually I need to update gd.py to store username in gd_results. Let's add that column logic.
-        # For now, querying gd_results assuming it has 'username' and 'created_at' or 'timestamp'
-        try:
-            gd_query = db.execute(
-                text("""
-                    SELECT id, final_score, communication_score, content_score, topic_id, timestamp
-                    FROM gd_results 
-                    WHERE username = :u 
-                    AND (
-                        DATE(timestamp) = :d OR 
-                        DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) = :d
-                    )
-                """),
-                {"u": username.strip(), "d": target_date}
-            ).fetchall()
-
-            for row in gd_query:
-                report["GD"].append({
-                    "id": row[0],
-                    "final_score": float(row[1]) if row[1] else 0.0,
-                    "communication_score": float(row[2]) if row[2] else 0.0,
-                    "content_score": float(row[3]) if row[3] else 0.0,
-                    "topic_id": int(row[4]) if row[4] else 0,
-                    "timestamp": str(row[5]) if row[5] else "",
-                })
-        except Exception as e:
-            print(f"DEBUG: Could not fetch GD results, perhaps missing column. Error: {e}")
+        # 2. GD fallback for OLD records (those not in results table with category 'GD')
+        if not report["GD"]:
+            try:
+                gd_query = db.execute(
+                    text("""
+                        SELECT id, final_score, communication_score, content_score, topic_id, timestamp
+                        FROM gd_results 
+                        WHERE username = :u 
+                        AND (
+                            DATE(timestamp) = :d OR 
+                            DATE(DATE_ADD(timestamp, INTERVAL '5:30' HOUR_MINUTE)) = :d
+                        )
+                    """),
+                    {"u": username.strip(), "d": target_date}
+                ).fetchall()
+    
+                for row in gd_query:
+                    report["GD"].append({
+                        "id": row[0], # NOTE: This refers to gd_results.id, which might cause issues in session_detail if not handled
+                        "final_score": float(row[1]) if row[1] else 0.0,
+                        "communication_score": float(row[2]) if row[2] else 0.0,
+                        "content_score": float(row[3]) if row[3] else 0.0,
+                        "topic_id": str(row[4]) if row[4] else "",
+                        "timestamp": str(row[5]) if row[5] else "",
+                    })
+            except Exception as e:
+                print(f"DEBUG: Could not fetch GD results, perhaps missing column. Error: {e}")
 
         return report
 
@@ -1882,7 +1964,7 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
                 FROM (
                     SELECT COUNT(*) as cnt, SUM(score) as total_score FROM results WHERE username = :username
                     UNION ALL
-                    SELECT COUNT(*) as cnt, SUM(overall_score) as total_score FROM gd_results WHERE username = :username
+                    SELECT COUNT(*) as cnt, SUM(overall_score) as total_score FROM gd_results WHERE username = :username AND `result_id` IS NULL
                 ) combined
             """),
             {"username": username.strip()}
@@ -2009,6 +2091,84 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
         print(f"Error in dashboard: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def calculate_confidence(transcript: str, duration: float):
+    """
+    Calculate confidence score based on speech metrics.
+    Metrics: WPM (Speed), Filler Words, Answer Length, Tone (Sentiment)
+    """
+    words = transcript.split()
+    word_count = len(words)
+    
+    if word_count == 0:
+        return {
+            "score": 0,
+            "wpm": 0,
+            "filler_count": 0,
+            "sentiment_score": 0,
+            "duration": round(duration, 1),
+            "word_count": 0,
+            "analysis": {
+                "pace": "None",
+                "length": "None",
+                "fillers": "None"
+            }
+        }
+    
+    # 1. Speech Speed (WPM)
+    if duration > 0:
+        wpm = (word_count / duration) * 60
+    else:
+        wpm = 0
+        
+    if 110 <= wpm <= 160: 
+        speed_score = 100
+    elif (90 <= wpm < 110) or (160 < wpm <= 180): 
+        speed_score = 70
+    else: 
+        speed_score = 40
+    
+    # 2. Filler Words detection
+    filler_words = ["um", "uh", "like", "actually", "basically", "you know"]
+    filler_count = sum(transcript.lower().count(f) for f in filler_words)
+    filler_score = max(0, 100 - filler_count * 5)
+    
+    # 3. Answer Length
+    if word_count > 60: 
+        length_score = 100
+    elif 30 <= word_count <= 60: 
+        length_score = 80
+    elif 10 <= word_count < 30: 
+        length_score = 60
+    else: 
+        length_score = 40
+    
+    # 4. Keyword-based Sentiment (Tone)
+    pos_words = ["believe", "sure", "definitely", "achieved", "implemented", "passion", "expert", "experience", "successfully", "impact", "growth", "challenge", "solved"]
+    neg_words = ["maybe", "guess", "not sure", "possibly", "difficult", "struggled", "don't know", "hard"]
+    sentiment_score = 60 # Confident baseline
+    for w in words:
+        clean_w = re.sub(r'[^\w]', '', w.lower())
+        if clean_w in pos_words: sentiment_score += 5
+        if clean_w in neg_words: sentiment_score -= 5
+    sentiment_score = max(0, min(100, sentiment_score))
+    
+    # Final Weighted Average
+    confidence = (speed_score + filler_score + length_score + sentiment_score) / 4
+    
+    return {
+        "score": round(confidence),
+        "wpm": round(wpm),
+        "filler_count": filler_count,
+        "sentiment_score": sentiment_score,
+        "duration": round(duration, 1),
+        "word_count": word_count,
+        "analysis": {
+            "pace": "Good" if speed_score == 100 else "Average" if speed_score == 70 else "Needs Improvement",
+            "length": "Adequate" if length_score >= 80 else "Short",
+            "fillers": "Low" if filler_score >= 90 else "Noticeable" if filler_score >= 70 else "High"
+        }
+    }
+
 @app.post("/evaluate_interview", tags=["Interview Practice"])
 async def evaluate(audio: UploadFile = File(...), username: str = Form("Anonymous"), db: Session = Depends(get_db)):
     """Evaluate interview audio response"""
@@ -2020,6 +2180,11 @@ async def evaluate(audio: UploadFile = File(...), username: str = Form("Anonymou
         
         transcription_result = stt_model.transcribe(temp_filename)
         transcription = transcription_result.get("text", "").strip()
+        segments = transcription_result.get("segments", [])
+        duration = segments[-1].get("end", 0) if segments else 0
+
+        # Calculate Speech Confidence
+        confidence_data = calculate_confidence(transcription, duration)
 
         prompt = f"""
 You are an expert Technical Interviewer. 
@@ -2067,8 +2232,11 @@ Rules:
             score=score_val,
             total_questions=10,
             category="INTERVIEW",
-            area="Interview Practice", # Default area for interview
-            confidence=json.dumps({"feedback": data.get("feedback", "")}), # Storing feedback in confidence for now
+            area="Interview Practice", 
+            confidence=json.dumps({
+                "feedback": data.get("feedback", ""),
+                "metrics": confidence_data
+            }), 
             timestamp=get_ist_now()
         )
         db.add(new_score)
@@ -2082,13 +2250,12 @@ Rules:
             user_answer=transcription,
             accuracy=data.get("score", "5/10"),
             ideal_answer=data.get("ideal_answer", ""),
-            improvement="Focus on the differences between compile-time and run-time constants." # Generic improvement for now
+            improvement="Focus on the differences between compile-time and run-time constants." 
         )
         db.add(detail)
         db.commit()
 
         # ── INTERVIEW LEVEL BONUS: +8% for score > 5 ──
-        # Bonus is cumulative across sessions.
         from models import User
         level_up = False
         if score_val > 5:
@@ -2108,6 +2275,7 @@ Rules:
             "status": "success",
             "score": data.get("score", "5/10"),
             "feedback": data.get("feedback", ""),
+            "confidence": confidence_data,
             "ideal_answer": data.get("ideal_answer", ""),
             "level_up": level_up
         }
@@ -2546,7 +2714,8 @@ async def background_process_answer(username: str, index: int, question: str, au
             session_answers[username][index].update({
                 "answer": transcription,
                 "status": "evaluating_technical",
-                "voice_metrics": voice_metrics
+                "voice_metrics": voice_metrics,
+                "duration": duration
             })
         
         # 4. Trigger Evaluation (Now async/parallel)
@@ -2676,10 +2845,43 @@ async def final_session_report(username: str = Form(...), video: Optional[Upload
     if live_metrics["box"] > 10: warning_notes.append("Candidate was frequently out of camera frame.")
     
     qa_text = ""
+    session_transcript = ""
+    total_duration = 0.0
     for item in qa_history:
-        ans = item.get('answer', "No response recorded.")
+        ans = item.get('answer', "")
+        # Filter out placeholders to avoid counting them as speech
+        if ans and ans not in ["No response recorded.", "Processing...", "No audible response recorded.", "No speech detected."]:
+            session_transcript += ans + " "
+            total_duration += item.get("duration", 0.0)
+        
         v_m = item.get("voice_metrics", {})
         qa_text += f"Question: {item['question']}\nTechnical Accuracy: {item.get('accuracy', '0%')}\nCommunication Details: {v_m.get('feedback', 'N/A')}\n\n"
+
+    # 4b. Global Speech Confidence Calculation
+    session_confidence = calculate_confidence(session_transcript, total_duration)
+    
+    # Generate brief inference for the student
+    if session_confidence['word_count'] == 0:
+        confidence_inference = "No speech was detected during this session. Please ensure your microphone is working and you are speaking clearly."
+    else:
+        cp = session_confidence['analysis']
+        inference_parts = []
+        if cp['pace'] == "Good":
+            inference_parts.append("Your speaking pace is professional and easy to follow.")
+        else:
+            inference_parts.append(f"Your speaking pace {cp['pace'].lower()}, consider adjusting it for better clarity.")
+            
+        if cp['fillers'] == "Low":
+            inference_parts.append("Great job avoiding filler words, you sound very confident.")
+        elif cp['fillers'] == "Noticeable":
+            inference_parts.append("You used some filler words; pausing briefly can help reduce them.")
+        else:
+            inference_parts.append("High filler word usage detected. Practice structured thinking to minimize hesitation.")
+            
+        if cp['length'] == "Short":
+            inference_parts.append("Your answers were a bit brief. Try providing more context or examples in technical discussions.")
+            
+        confidence_inference = " ".join(inference_parts)
 
     # Prepare detailed voice metrics for the prompt
     total_fillers = sum(q.get("voice_metrics", {}).get("filler_count", 0) for q in qa_history)
@@ -2735,6 +2937,11 @@ async def final_session_report(username: str = Form(...), video: Optional[Upload
          "smiles": {smile_pct},
          "avg_wpm": {round(avg_wpm)},
          "total_fillers": {total_fillers}
+      }},
+      "speech_confidence": {{
+         "score": {session_confidence['score']},
+         "analysis": {json.dumps(session_confidence['analysis'])},
+         "inference": "{confidence_inference}"
       }}
     }}
     """
@@ -2945,17 +3152,29 @@ async def get_session_detail(category: str, session_id: int, db: Session = Depen
         cat = category.upper()
         if cat == "GD":
             from models import GDResult
-            res = db.query(GDResult).filter(GDResult.id == session_id).first()
+            # First try finding by result_id (new system)
+            res = db.query(GDResult).filter(GDResult.result_id == session_id).first()
+            # Fallback to finding by GDResult's own primary key (old system)
+            if not res:
+                res = db.query(GDResult).filter(GDResult.id == session_id).first()
+            
             if not res: return {"error": "Not found"}
-            # Fetch real topic text
+            # Fetch real topic text — try gd_topics_extra first (new), fallback to gd_topics
             topic_text = "GD Topic"
             try:
                 topic_row = db.execute(
-                    text("SELECT topic FROM gd_topics WHERE id = :tid"),
+                    text("SELECT question FROM gd_topics_extra WHERE question_id = :tid"),
                     {"tid": res.topic_id}
                 ).fetchone()
                 if topic_row:
                     topic_text = topic_row[0]
+                else:
+                    topic_row = db.execute(
+                        text("SELECT topic FROM gd_topics WHERE id = :tid"),
+                        {"tid": res.topic_id}
+                    ).fetchone()
+                    if topic_row:
+                        topic_text = topic_row[0]
             except Exception:
                 pass
             return {

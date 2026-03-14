@@ -581,7 +581,7 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
                   end: Alignment.bottomRight,
                   colors: [
                     Colors.cyanAccent.withOpacity(0.15),
-                    Colors.purpleAccent.withOpacity(0.15),
+                    Colors.blueAccent.withOpacity(0.15),
                   ],
                 ),
                 borderRadius: BorderRadius.circular(32),
@@ -619,7 +619,7 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
             children: [
               _buildMetricCard("TECHNICAL", "${scores['technical'] ?? 'N/A'}", Icons.code, Colors.cyanAccent),
               const SizedBox(width: 12),
-              _buildMetricCard("COMMUNICATION", "${scores['voice'] ?? 'N/A'}", Icons.mic, Colors.purpleAccent),
+              _buildMetricCard("COMMUNICATION", "${scores['voice'] ?? 'N/A'}", Icons.mic, Colors.blueAccent),
             ],
           ),
           const SizedBox(height: 12),
@@ -641,12 +641,26 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
                 _buildMetricCard("AVG SPEECH RATE", "${_result!['session_metrics']['avg_wpm'] ?? 0} WPM", Icons.speed, Colors.greenAccent),
               ],
             ),
+          const SizedBox(height: 12),
+          
+          if (_result!['speech_confidence'] != null)
+            Column(
+              children: [
+                Row(
+                   children: [
+                      _buildMetricCard("SPEECH CONFIDENCE", "${_result!['speech_confidence']['score']}%", Icons.sentiment_satisfied_alt, Colors.orangeAccent),
+                   ]
+                ),
+                const SizedBox(height: 12),
+                _buildPremiumFeedbackSection("Speech Analysis & Inference", _result!['speech_confidence']['inference'] ?? "N/A", Icons.auto_awesome, [Colors.orangeAccent, Colors.redAccent]),
+              ],
+            ),
           const SizedBox(height: 40),
 
           // 3. Narrative Feedback
           _buildPremiumFeedbackSection("Critical Confidence Analysis", _result!['overall_confidence'], Icons.insights, [Colors.cyanAccent, Colors.blueAccent]),
           const SizedBox(height: 24),
-          _buildPremiumFeedbackSection("Behavioral & Speech Observations", _result!['behavioral_feedback'], Icons.psychology, [Colors.purpleAccent, Colors.deepPurpleAccent]),
+          _buildPremiumFeedbackSection("Behavioral & Speech Observations", _result!['behavioral_feedback'], Icons.psychology, [Colors.blueAccent, Colors.blue]),
           
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 40),
@@ -697,13 +711,13 @@ class _InterviewScreenState extends State<InterviewScreen> with WidgetsBindingOb
                       child: Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.purpleAccent.withOpacity(0.05),
+                          color: Colors.blueAccent.withOpacity(0.05),
                           borderRadius: BorderRadius.circular(15),
-                          border: Border.all(color: Colors.purpleAccent.withOpacity(0.1)),
+                          border: Border.all(color: Colors.blueAccent.withOpacity(0.1)),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.record_voice_over, color: Colors.purpleAccent, size: 16),
+                            const Icon(Icons.record_voice_over, color: Colors.blueAccent, size: 16),
                             const SizedBox(width: 12),
                             Text("${vStats['wpm']} WPM", style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
                             const SizedBox(width: 15),

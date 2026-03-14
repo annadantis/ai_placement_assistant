@@ -64,9 +64,10 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
         children: [
           // Background Glows
           Positioned(top: -100, right: -50, child: _blurGlow(Colors.indigo.withOpacity(0.2), 300)),
-          Positioned(bottom: 100, left: -50, child: _blurGlow(Colors.purple.withOpacity(0.15), 250)),
+          Positioned(bottom: 100, left: -50, child: _blurGlow(Colors.blue.withOpacity(0.15), 250)),
           
           CustomScrollView(
+            primary: true,
             slivers: [
               _buildAppBar(),
               SliverPadding(
@@ -89,9 +90,6 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
                     const SizedBox(height: 16),
                     _buildSkillProfile(),
                     const SizedBox(height: 32),
-                    _sectionHeader("Session Growth", "Success in GD & Interviews over the month"),
-                    const SizedBox(height: 16),
-                    _buildWeeklyChart(),
                     const SizedBox(height: 32),
                     _sectionHeader("Session History", "Click on any session to view detailed AI feedback"),
                     const SizedBox(height: 16),
@@ -436,23 +434,6 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
     );
   }
 
-  Widget _buildWeeklyChart() {
-    return _glassCard(
-      padding: const EdgeInsets.all(20),
-      child: SizedBox(
-        height: 180,
-        child: BarChart(
-          BarChartData(
-            gridData: const FlGridData(show: false),
-            titlesData: _barTitles(),
-            borderData: FlBorderData(show: false),
-            barGroups: _getBarGroups(),
-          ),
-        ),
-      ),
-    );
-  }
-
   // --- Helpers ---
   Widget _glassCard({required Widget child, EdgeInsetsGeometry? padding}) {
     return ClipRRect(
@@ -509,25 +490,6 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
     );
   }
 
-  List<BarChartGroupData> _getBarGroups() {
-    List gd = reportData['gd_weekly'] ?? [];
-    List interview = reportData['interview_weekly'] ?? [];
-    int len = gd.length > interview.length ? gd.length : interview.length;
-    if (len == 0) return [];
-
-    return List.generate(len, (i) {
-      double gdScore = i < gd.length ? (gd[i]['score'] as num).toDouble() : 0;
-      double intScore = i < interview.length ? (interview[i]['score'] as num).toDouble() : 0;
-      return BarChartGroupData(
-        x: i,
-        barRods: [
-          BarChartRodData(toY: gdScore, color: Colors.orangeAccent, width: 8, borderRadius: BorderRadius.circular(4)),
-          BarChartRodData(toY: intScore, color: Colors.pinkAccent, width: 8, borderRadius: BorderRadius.circular(4)),
-        ],
-      );
-    });
-  }
-
   Future<void> _pickDate() async {
     final DateTime? picked = await showDatePicker(
       context: context,
@@ -538,7 +500,7 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: const ColorScheme.dark(
-              primary: Colors.indigoAccent,
+              primary: Colors.blueAccent,
               onPrimary: Colors.white,
               surface: Color(0xFF1E293B),
               onSurface: Colors.white,

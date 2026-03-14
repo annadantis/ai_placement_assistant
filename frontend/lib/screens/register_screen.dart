@@ -27,7 +27,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     const Color scaffoldBg = Color(0xFF0F0C29);
-    const Color accentColor = Color(0xFF6C63FF);
+    const Color accentColor = Color(0xFF2196F3);
 
     return Scaffold(
       backgroundColor: scaffoldBg,
@@ -276,8 +276,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 15),
           decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF6C63FF).withOpacity(0.2) : Colors.white.withOpacity(0.05),
-            border: Border.all(color: isSelected ? const Color(0xFF6C63FF) : Colors.white12, width: 2),
+            color: isSelected ? const Color(0xFF2196F3).withOpacity(0.2) : Colors.white.withOpacity(0.05),
+            border: Border.all(color: isSelected ? const Color(0xFF2196F3) : Colors.white12, width: 2),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(

@@ -27,6 +27,13 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,
+        scrollbarTheme: ScrollbarThemeData(
+          thumbVisibility: WidgetStateProperty.all(true),
+          trackVisibility: WidgetStateProperty.all(true),
+          thickness: WidgetStateProperty.all(6),
+          thumbColor: WidgetStateProperty.all(Colors.white.withOpacity(0.5)),
+          radius: const Radius.circular(10),
+        ),
       ),
       initialRoute: '/login',
       routes: {

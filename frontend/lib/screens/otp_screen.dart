@@ -98,7 +98,7 @@ class _OtpScreenState extends State<OtpScreen> {
   @override
   Widget build(BuildContext context) {
     const Color scaffoldBg = Color(0xFF0F0C29);
-    const Color accentColor = Color(0xFF6C63FF);
+    const Color accentColor = Color(0xFF2196F3);
 
     return Scaffold(
       backgroundColor: scaffoldBg,
